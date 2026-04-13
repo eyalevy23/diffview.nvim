@@ -14,7 +14,7 @@ local function render_file(comp, show_path, depth)
   comp:add_text(file.status .. " ", hl.get_git_hl(file.status))
 
   if depth then
-    comp:add_text(string.rep(" ", depth * 2 + 2))
+    comp:add_text(string.rep(" ", depth + 1))
   end
 
   local icon, icon_hl = hl.get_file_icon(file.basename, file.extension)
@@ -94,7 +94,7 @@ local function render_file_tree_recurse(depth, comp)
     get_dir_status_text(ctx, conf.file_panel.tree_options) .. " ",
     hl.get_git_hl(ctx.status)
   )
-  dir:add_text(string.rep(" ", depth * 2))
+  dir:add_text(string.rep(" ", depth))
   dir:add_text(ctx.collapsed and conf.signs.fold_closed or conf.signs.fold_open, "DiffviewNonText")
 
   if conf.use_icons then
