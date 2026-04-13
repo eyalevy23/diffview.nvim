@@ -240,6 +240,33 @@ function Diff1Inline:get_main_win()
   return self.b
 end
 
+---Clear inline diff extmarks and folds from the buffer
+---@private
+function Diff1Inline:_clear_inline(buf)
+  if buf and api.nvim_buf_is_valid(buf) then
+    api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+    for _, winid in ipairs(api.nvim_list_wins()) do
+      if api.nvim_win_is_valid(winid) and api.nvim_win_get_buf(winid) == buf then
+        api.nvim_win_call(winid, function()
+          pcall(vim.cmd, "norm! zE")
+        end)
+      end
+    end
+  end
+end
+
+---@override
+function Diff1Inline:detach_files()
+  self:_clear_inline(self.b.file and self.b.file.bufnr)
+  Diff2.detach_files(self)
+end
+
+---@override
+function Diff1Inline:destroy()
+  self:_clear_inline(self.b.file and self.b.file.bufnr)
+  Diff2.destroy(self)
+end
+
 ---Override sync_scroll to be a no-op (single window, nothing to sync)
 function Diff1Inline:sync_scroll() end
 
