@@ -147,26 +147,22 @@ function Diff1Inline:apply_inline_diff()
 
   if not ok or not diff_result then return end
 
-  -- Process hunks in reverse order so line numbers stay valid
-  -- Each hunk: { old_start, old_count, new_start, new_count }
+  -- Sort hunks by position in new file
   local hunks = {}
   for _, hunk in ipairs(diff_result) do
     table.insert(hunks, hunk)
   end
+  table.sort(hunks, function(a, b) return a[3] < b[3] end)
 
-  -- Sort hunks in reverse order (process from bottom to top)
-  table.sort(hunks, function(a, b)
-    return a[3] > b[3]
-  end)
-
-  for _, hunk in ipairs(hunks) do
+  -- Apply highlights in reverse so extmark positions stay valid
+  for i = #hunks, 1, -1 do
+    local hunk = hunks[i]
     local old_start, old_count, new_start, new_count = hunk[1], hunk[2], hunk[3], hunk[4]
 
-    -- Highlight added lines (green)
     if new_count > 0 then
-      for i = new_start, new_start + new_count - 1 do
-        if i >= 1 and i <= #new_lines then
-          api.nvim_buf_set_extmark(buf_b, ns, i - 1, 0, {
+      for j = new_start, new_start + new_count - 1 do
+        if j >= 1 and j <= #new_lines then
+          api.nvim_buf_set_extmark(buf_b, ns, j - 1, 0, {
             line_hl_group = "DiffviewDiffAdd",
             priority = 50,
           })
@@ -174,23 +170,19 @@ function Diff1Inline:apply_inline_diff()
       end
     end
 
-    -- Insert deleted lines as virtual lines (red)
     if old_count > 0 then
       local virt_lines = {}
-      for i = old_start, old_start + old_count - 1 do
-        if i >= 1 and i <= #old_lines then
-          table.insert(virt_lines, { { old_lines[i], "DiffviewDiffDelete" } })
+      for j = old_start, old_start + old_count - 1 do
+        if j >= 1 and j <= #old_lines then
+          table.insert(virt_lines, { { old_lines[j], "DiffviewDiffDelete" } })
         end
       end
 
       if #virt_lines > 0 then
-        -- Place virtual lines above the new_start position
         local virt_line_pos = new_start - 1
         if new_count == 0 then
-          -- Pure deletion: place after the line before the deletion point
           virt_line_pos = new_start
         end
-        -- Clamp to valid range
         virt_line_pos = math.max(0, math.min(virt_line_pos, #new_lines))
 
         api.nvim_buf_set_extmark(buf_b, ns, virt_line_pos, 0, {
@@ -200,6 +192,47 @@ function Diff1Inline:apply_inline_diff()
         })
       end
     end
+  end
+
+  -- Fold unchanged sections (keep 3 context lines around each hunk)
+  local context = 3
+  local total = #new_lines
+
+  if total > 0 and #hunks > 0 then
+    api.nvim_win_call(self.b.id, function()
+      pcall(vim.cmd, "norm! zE")
+
+      local visible = {}
+      for _, hunk in ipairs(hunks) do
+        local s = hunk[3]
+        local e = s + math.max(hunk[4], 1) - 1
+        table.insert(visible, { math.max(1, s - context), math.min(total, e + context) })
+      end
+
+      -- Merge overlapping ranges
+      local merged = { visible[1] }
+      for k = 2, #visible do
+        local prev = merged[#merged]
+        local cur = visible[k]
+        if cur[1] <= prev[2] + 1 then
+          prev[2] = math.max(prev[2], cur[2])
+        else
+          table.insert(merged, cur)
+        end
+      end
+
+      -- Fold gaps
+      local pos = 1
+      for _, range in ipairs(merged) do
+        if pos < range[1] then
+          vim.cmd(pos .. "," .. (range[1] - 1) .. "fold")
+        end
+        pos = range[2] + 1
+      end
+      if pos <= total then
+        vim.cmd(pos .. "," .. total .. "fold")
+      end
+    end)
   end
 end
 
