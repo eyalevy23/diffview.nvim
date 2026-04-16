@@ -47,6 +47,7 @@ Panel.winopts = {
   colorcolumn = "",
   foldmethod = "manual",
   foldcolumn = "0",
+  statuscolumn = "",
   scrollbind = false,
   cursorbind = false,
   diff = false,
