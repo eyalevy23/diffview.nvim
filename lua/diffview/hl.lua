@@ -475,6 +475,7 @@ function M.update_diff_hl()
 
   M.hi("DiffviewDiffAddAsDelete", { fg = fg, bg = bg, style = style })
   M.hi_link("DiffviewDiffDeleteDim", "Comment", { default = true })
+  M.hi_link("DiffviewDiffDeleteText", "DiffviewDiffText", { default = true })
 
   if config.get_config().enhanced_diff_hl then
     M.hi_link("DiffviewDiffDelete", "DiffviewDiffDeleteDim")
