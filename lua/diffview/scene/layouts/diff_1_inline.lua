@@ -154,6 +154,11 @@ function Diff1Inline:apply_inline_diff()
   end
   table.sort(hunks, function(a, b) return a[3] < b[3] end)
 
+  -- Compute available text width once for virtual line wrapping
+  local win_width = api.nvim_win_get_width(self.b.id)
+  local textoff = vim.fn.getwininfo(self.b.id)[1].textoff or 0
+  local text_width = math.max(1, win_width - textoff)
+
   -- Apply highlights in reverse so extmark positions stay valid
   for i = #hunks, 1, -1 do
     local hunk = hunks[i]
@@ -172,9 +177,33 @@ function Diff1Inline:apply_inline_diff()
 
     if old_count > 0 then
       local virt_lines = {}
+
       for j = old_start, old_start + old_count - 1 do
         if j >= 1 and j <= #old_lines then
-          table.insert(virt_lines, { { old_lines[j], "DiffviewDiffDelete" } })
+          local line = old_lines[j]
+          -- Wrap long lines into multiple virtual lines
+          if vim.fn.strdisplaywidth(line) > text_width then
+            local total_chars = vim.fn.strchars(line)
+            local char_pos = 0
+            while char_pos < total_chars do
+              -- Binary search for max chars that fit in text_width
+              local lo, hi = 1, total_chars - char_pos
+              while lo < hi do
+                local mid = math.ceil((lo + hi) / 2)
+                if vim.fn.strdisplaywidth(vim.fn.strcharpart(line, char_pos, mid)) > text_width then
+                  hi = mid - 1
+                else
+                  lo = mid
+                end
+              end
+              local chunk = vim.fn.strcharpart(line, char_pos, lo)
+              if vim.fn.strdisplaywidth(chunk) == 0 then break end
+              table.insert(virt_lines, { { chunk, "DiffviewDiffDelete" } })
+              char_pos = char_pos + lo
+            end
+          else
+            table.insert(virt_lines, { { line, "DiffviewDiffDelete" } })
+          end
         end
       end
 
