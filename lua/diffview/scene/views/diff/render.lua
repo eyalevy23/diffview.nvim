@@ -121,6 +121,31 @@ local function render_file_tree(comp)
   end
 end
 
+---Render a "+N -M" line-change summary for a set of files, appended to a
+---section title line. No-op when none of the files carry additions stats
+---(e.g. the conflicts section).
+---@param comp RenderComponent
+---@param files FileEntry[]
+local function render_stats_summary(comp, files)
+  local additions, deletions = 0, 0
+  local has_stats = false
+
+  for _, file in ipairs(files) do
+    if file.stats and file.stats.additions then
+      has_stats = true
+      additions = additions + file.stats.additions
+      deletions = deletions + file.stats.deletions
+    end
+  end
+
+  if not has_stats then return end
+
+  comp:add_text("  ")
+  comp:add_text("+" .. additions, "DiffviewFilePanelInsertions")
+  comp:add_text(" ")
+  comp:add_text("-" .. deletions, "DiffviewFilePanelDeletions")
+end
+
 ---@param listing_style "list"|"tree"
 ---@param comp RenderComponent
 local function render_files(listing_style, comp)
@@ -171,6 +196,7 @@ return function(panel)
     comp = panel.components.working.title.comp
     comp:add_text("Changes ", "DiffviewFilePanelTitle")
     comp:add_text("(" .. #panel.files.working .. ")", "DiffviewFilePanelCounter")
+    render_stats_summary(comp, panel.files.working)
     comp:ln()
 
     render_files(panel.listing_style, panel.components.working.files.comp)
@@ -181,6 +207,7 @@ return function(panel)
     comp = panel.components.staged.title.comp
     comp:add_text("Staged changes ", "DiffviewFilePanelTitle")
     comp:add_text("(" .. #panel.files.staged .. ")", "DiffviewFilePanelCounter")
+    render_stats_summary(comp, panel.files.staged)
     comp:ln()
 
     render_files(panel.listing_style, panel.components.staged.files.comp)

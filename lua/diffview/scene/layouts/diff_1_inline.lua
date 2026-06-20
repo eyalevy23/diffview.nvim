@@ -163,11 +163,20 @@ function Diff1Inline:apply_inline_diff()
   local textoff = vim.fn.getwininfo(self.b.id)[1].textoff or 0
   local text_width = math.max(1, win_width - textoff)
 
+  -- Word-level highlight is only meaningful when a deleted line and an added
+  -- line are genuinely a modification of one another. Be conservative: require
+  -- strong *content* similarity to pair two lines, and drop the highlight when
+  -- too much of the line changed (past that point a flat add/delete reads
+  -- better than scattered noise). Tune these if highlights feel too eager/shy.
+  local PAIR_MIN_SIMILARITY = 0.5
+  local MAX_CHANGE_RATIO = 0.5
+
   -- Tokenize a line into runs of word chars, runs of whitespace, and single
   -- "other" chars (punctuation, multi-byte). Returns parallel arrays of token
   -- strings plus 0-indexed byte offsets [start, end_excl) for each token.
   local function tokenize(s)
-    local tokens, byte_starts, byte_ends_excl = {}, {}, {}
+    local tokens, byte_starts, byte_ends_excl, is_word = {}, {}, {}, {}
+    local word_total = 0
     local len = #s
     local i = 1
 
@@ -203,6 +212,8 @@ function Diff1Inline:apply_inline_diff()
         tokens[#tokens + 1] = s:sub(i, j - 1)
         byte_starts[#byte_starts + 1] = start
         byte_ends_excl[#byte_ends_excl + 1] = j - 1
+        is_word[#is_word + 1] = (k == "word")
+        if k == "word" then word_total = word_total + (j - 1 - start) end
         i = j
       else
         local clen = utf8_len(b)
@@ -211,11 +222,18 @@ function Diff1Inline:apply_inline_diff()
         tokens[#tokens + 1] = s:sub(i, j - 1)
         byte_starts[#byte_starts + 1] = start
         byte_ends_excl[#byte_ends_excl + 1] = j - 1
+        is_word[#is_word + 1] = false
         i = j
       end
     end
 
-    return { tokens = tokens, byte_starts = byte_starts, byte_ends_excl = byte_ends_excl }
+    return {
+      tokens = tokens,
+      byte_starts = byte_starts,
+      byte_ends_excl = byte_ends_excl,
+      is_word = is_word,
+      word_total = word_total,
+    }
   end
 
   -- Run Myers on two token arrays. Returns a result table with:
@@ -243,13 +261,15 @@ function Diff1Inline:apply_inline_diff()
     end
 
     local ai, bi = 1, 1
-    local noop = 0
+    local matched_word = 0
     local changed_a, changed_b = 0, 0
 
     for _, op in ipairs(script) do
       if op == EditToken.NOOP then
         flush_a(); flush_b()
-        noop = noop + 1
+        if tok_a.is_word[ai] then
+          matched_word = matched_word + (tok_a.byte_ends_excl[ai] - tok_a.byte_starts[ai])
+        end
         ai, bi = ai + 1, bi + 1
       elseif op == EditToken.DELETE then
         local s, e = tok_a.byte_starts[ai], tok_a.byte_ends_excl[ai]
@@ -277,7 +297,12 @@ function Diff1Inline:apply_inline_diff()
 
     local total_a = (#tok_a.byte_ends_excl > 0) and tok_a.byte_ends_excl[#tok_a.byte_ends_excl] or 0
     local total_b = (#tok_b.byte_ends_excl > 0) and tok_b.byte_ends_excl[#tok_b.byte_ends_excl] or 0
-    local denom = math.max(#tok_a.tokens, #tok_b.tokens, 1)
+
+    -- Content similarity: fraction of "word" bytes (identifiers, keywords,
+    -- numbers) that matched. Whitespace and punctuation are deliberately
+    -- ignored, so two unrelated lines that merely share boilerplate like
+    -- `if ... then` or `x[#x + 1] = {` don't score as similar.
+    local word_denom = math.max(tok_a.word_total, tok_b.word_total, 1)
 
     return {
       ranges_a = ranges_a,
@@ -286,18 +311,18 @@ function Diff1Inline:apply_inline_diff()
       changed_chars_b = changed_b,
       total_chars_a = total_a,
       total_chars_b = total_b,
-      similarity = noop / denom,
+      similarity = matched_word / word_denom,
     }
   end
 
   -- Filter a diff result through the change-ratio threshold. If too much of
-  -- either line changed (>0.65), the per-token highlights are useless noise --
+  -- either line changed (> MAX_CHANGE_RATIO), the per-token highlights are noise --
   -- return nil so the caller falls back to plain add/delete colors.
   local function ratio_filter(result)
     if not result then return nil, nil end
     local ra = result.total_chars_a > 0 and result.changed_chars_a / result.total_chars_a or 0
     local rb = result.total_chars_b > 0 and result.changed_chars_b / result.total_chars_b or 0
-    if ra > 0.65 or rb > 0.65 then return nil, nil end
+    if ra > MAX_CHANGE_RATIO or rb > MAX_CHANGE_RATIO then return nil, nil end
     return result.ranges_a, result.ranges_b
   end
 
@@ -321,7 +346,7 @@ function Diff1Inline:apply_inline_diff()
               and #toa.tokens <= 400 and #tob.tokens <= 400
             then
               local res = diff_tokens(toa, tob)
-              if res.similarity >= 0.30 then
+              if res.similarity >= PAIR_MIN_SIMILARITY then
                 candidates[#candidates + 1] = {
                   oi = oi, ni = ni, similarity = res.similarity, result = res,
                 }
@@ -346,27 +371,110 @@ function Diff1Inline:apply_inline_diff()
     return pairs_list
   end
 
-  -- Build a virt_line by splitting the line around a list of 0-indexed
-  -- { byte_start, byte_end_excl } change ranges. Unchanged spans get
-  -- DiffviewDiffDelete; changed spans get DiffviewDiffDeleteText.
-  local function make_delete_virt_chunks(line, change_ranges)
-    if not change_ranges or #change_ranges == 0 then
+  -- Query Treesitter for highlight spans across a range of lines in `buf`.
+  -- Returns a map { [0-indexed lnum] = { { byte_start, byte_end_excl, hl_group }, ... } }.
+  -- Empty table if no parser is available for the buffer's filetype.
+  local function ts_spans_for_lines(buf, lstart, lend_excl, line_texts_1idx)
+    if not buf or not api.nvim_buf_is_valid(buf) then return {} end
+    local ok, parser = pcall(vim.treesitter.get_parser, buf)
+    if not ok or not parser then return {} end
+
+    pcall(function() parser:parse({ lstart, lend_excl }) end)
+
+    local spans_by_lnum = {}
+    parser:for_each_tree(function(tree, ltree)
+      local lang = ltree:lang()
+      local query = vim.treesitter.query.get(lang, "highlights")
+      if not query then return end
+
+      for id, node in query:iter_captures(tree:root(), buf, lstart, lend_excl) do
+        local capture = query.captures[id]
+        if capture and capture:sub(1, 1) ~= "_" then
+          local sr, sc, er, ec = node:range()
+          local hl = "@" .. capture .. "." .. lang
+          local lo = math.max(sr, lstart)
+          local hi = math.min(er, lend_excl - 1)
+          for lnum = lo, hi do
+            local line = line_texts_1idx[lnum + 1] or ""
+            local s = (lnum == sr) and sc or 0
+            local e = (lnum == er) and ec or #line
+            if e > s then
+              spans_by_lnum[lnum] = spans_by_lnum[lnum] or {}
+              spans_by_lnum[lnum][#spans_by_lnum[lnum] + 1] = { s, e, hl }
+            end
+          end
+        end
+      end
+    end)
+
+    return spans_by_lnum
+  end
+
+  -- Build a virt_line for a deleted source line. Combines two layers:
+  --   * background: DiffviewDiffDelete, or DiffviewDiffDeleteText inside a change range
+  --   * foreground: Treesitter capture hl group, if any covers that byte
+  -- Splits the line at every boundary from either layer so each chunk has a single
+  -- (bg, ts) pair. ts_spans/change_ranges are both 0-indexed [start, end_excl).
+  local function make_delete_virt_chunks(line, change_ranges, ts_spans)
+    if #line == 0 then
       return { { line, "DiffviewDiffDelete" } }
     end
-    local chunks = {}
-    local pos = 0
-    for _, range in ipairs(change_ranges) do
-      local cs, ce = range[1], range[2]
-      if cs > pos then
-        chunks[#chunks + 1] = { line:sub(pos + 1, cs), "DiffviewDiffDelete" }
+
+    -- Collect boundary points from both layers.
+    local boundaries = { [0] = true, [#line] = true }
+    if change_ranges then
+      for _, r in ipairs(change_ranges) do
+        boundaries[math.max(0, r[1])] = true
+        boundaries[math.min(#line, r[2])] = true
       end
-      if ce > cs then
-        chunks[#chunks + 1] = { line:sub(cs + 1, ce), "DiffviewDiffDeleteText" }
-      end
-      pos = ce
     end
-    if pos < #line then
-      chunks[#chunks + 1] = { line:sub(pos + 1), "DiffviewDiffDelete" }
+    if ts_spans then
+      for _, s in ipairs(ts_spans) do
+        boundaries[math.max(0, s[1])] = true
+        boundaries[math.min(#line, s[2])] = true
+      end
+    end
+
+    local sorted = {}
+    for b in pairs(boundaries) do sorted[#sorted + 1] = b end
+    table.sort(sorted)
+
+    local function in_range(r, pos) return pos >= r[1] and pos < r[2] end
+
+    local chunks = {}
+    for i = 1, #sorted - 1 do
+      local seg_s, seg_e = sorted[i], sorted[i + 1]
+      if seg_e > seg_s then
+        -- Sample at start of segment; active layer values are constant within.
+        local bg = "DiffviewDiffDelete"
+        if change_ranges then
+          for _, r in ipairs(change_ranges) do
+            if in_range(r, seg_s) then
+              bg = "DiffviewDiffDeleteText"
+              break
+            end
+          end
+        end
+
+        local ts_hl
+        if ts_spans then
+          -- Later captures override earlier (matches nvim-treesitter priority).
+          for _, s in ipairs(ts_spans) do
+            if in_range(s, seg_s) then ts_hl = s[3] end
+          end
+        end
+
+        local text = line:sub(seg_s + 1, seg_e)
+        if ts_hl then
+          chunks[#chunks + 1] = { text, { bg, ts_hl } }
+        else
+          chunks[#chunks + 1] = { text, bg }
+        end
+      end
+    end
+
+    if #chunks == 0 then
+      return { { line, "DiffviewDiffDelete" } }
     end
     return chunks
   end
@@ -471,10 +579,19 @@ function Diff1Inline:apply_inline_diff()
     if old_count > 0 then
       local virt_lines = {}
 
+      -- Pre-compute TS highlight spans for all deleted lines in this hunk.
+      local buf_a = self.a.file and self.a.file.bufnr
+      local ts_spans_by_lnum = ts_spans_for_lines(
+        buf_a,
+        math.max(0, old_start - 1),
+        math.min(#old_lines, old_start - 1 + old_count),
+        old_lines
+      )
+
       for j = old_start, old_start + old_count - 1 do
         if j >= 1 and j <= #old_lines then
           local line = old_lines[j]
-          local chunks = make_delete_virt_chunks(line, range_for_old[j])
+          local chunks = make_delete_virt_chunks(line, range_for_old[j], ts_spans_by_lnum[j - 1])
 
           -- Wrap if needed
           local total_w = vim.fn.strdisplaywidth(line)
