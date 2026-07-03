@@ -1839,6 +1839,52 @@ GitAdapter.tracked_files = async.wrap(function(self, left, right, args, kind, op
   callback(nil, files, conflicts)
 end)
 
+---Compute diff stats for a new (untracked) file, counting its lines the same
+---way `git diff --numstat` would against an empty file: every line is an
+---addition and there are no deletions. Returns nil for binary files or files
+---that can't be read, matching Git's `-` numstat for those.
+---@param path string Absolute path to the file.
+---@return GitStats?
+local function untracked_file_stats(path)
+  local fd = uv.fs_open(path, "r", 420) -- 0644
+  if not fd then return nil end
+
+  local additions = 0
+  local last_byte
+  local first_chunk = true
+  local binary = false
+
+  while true do
+    local chunk = uv.fs_read(fd, 65536)
+    if not chunk or chunk == "" then break end
+
+    if first_chunk then
+      first_chunk = false
+      -- Git treats a file as binary if a NUL byte occurs within the first 8000
+      -- bytes, in which case numstat reports "-" instead of a line count.
+      if chunk:sub(1, 8000):find("\0", 1, true) then
+        binary = true
+        break
+      end
+    end
+
+    local _, newlines = chunk:gsub("\n", "")
+    additions = additions + newlines
+    last_byte = chunk:sub(-1)
+  end
+
+  uv.fs_close(fd)
+
+  if binary then return nil end
+
+  -- A final line without a trailing newline still counts as an addition.
+  if last_byte and last_byte ~= "\n" then
+    additions = additions + 1
+  end
+
+  return { additions = additions, deletions = 0 }
+end
+
 GitAdapter.untracked_files = async.wrap(function(self, left, right, opt, callback)
   local job = Job({
     command = self:bin(),
@@ -1867,6 +1913,7 @@ GitAdapter.untracked_files = async.wrap(function(self, left, right, opt, callbac
       adapter = self,
       path = s,
       status = "?",
+      stats = untracked_file_stats(pl:absolute(s, self.ctx.toplevel)),
       kind = "working",
       revs = {
         a = left,

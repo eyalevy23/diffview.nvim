@@ -46,6 +46,7 @@ local M = {}
 ---@field initialized boolean
 ---@field valid boolean
 ---@field watcher uv_fs_poll_t # UV fs poll handle.
+---@field watch_augroup integer? # Augroup for the index watcher's focus listeners.
 local DiffView = oop.create_class("DiffView", StandardView.__get())
 
 ---DiffView constructor
@@ -88,18 +89,24 @@ function DiffView:post_open()
 
   if config.get_config().watch_index and self.adapter:instanceof(GitAdapter.__get()) then
     self.watcher = vim.loop.new_fs_poll()
-    self.watcher:start(
-      self.adapter.ctx.dir .. "/index",
-      1000,
-      ---@diagnostic disable-next-line: unused-local
-      vim.schedule_wrap(function(err, prev, cur)
-        if not err then
-          if self:is_cur_tabpage() then
-            self:update_files()
-          end
-        end
-      end)
+    self:watch_index_start()
+
+    -- Pause the poll while Neovim doesn't have focus: there's no point burning
+    -- an event-loop wakeup every second to stat the index when the user isn't
+    -- looking. Terminals without focus reporting simply never fire these
+    -- events, in which case the watcher keeps running as before.
+    self.watch_augroup = api.nvim_create_augroup(
+      fmt("diffview_watch_index_%d", self.tabpage),
+      { clear = true }
     )
+    api.nvim_create_autocmd("FocusLost", {
+      group = self.watch_augroup,
+      callback = function() self:watch_index_stop() end,
+    })
+    api.nvim_create_autocmd("FocusGained", {
+      group = self.watch_augroup,
+      callback = function() self:watch_index_start() end,
+    })
   end
 
   self:init_event_listeners()
@@ -168,10 +175,41 @@ function DiffView:file_open_post(e, new_entry, old_entry)
   end
 end
 
+---(Re)start polling the Git index for changes. Idempotent: stopping first
+---makes it safe to call on an already-active handle (e.g. repeated
+---`FocusGained` without an intervening `FocusLost`).
+function DiffView:watch_index_start()
+  if not self.watcher then return end
+
+  self.watcher:stop()
+  self.watcher:start(
+    self.adapter.ctx.dir .. "/index",
+    1000,
+    ---@diagnostic disable-next-line: unused-local
+    vim.schedule_wrap(function(err, prev, cur)
+      if not err and self:is_cur_tabpage() then
+        self:update_files()
+      end
+    end)
+  )
+end
+
+---Pause polling the Git index. Safe to call when the watcher is inactive.
+function DiffView:watch_index_stop()
+  if self.watcher then
+    self.watcher:stop()
+  end
+end
+
 ---@override
 function DiffView:close()
   if not self.closing:check() then
     self.closing:send()
+
+    if self.watch_augroup then
+      api.nvim_del_augroup_by_id(self.watch_augroup)
+      self.watch_augroup = nil
+    end
 
     if self.watcher then
       self.watcher:stop()
