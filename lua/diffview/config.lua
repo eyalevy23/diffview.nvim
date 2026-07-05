@@ -56,7 +56,7 @@ M.defaults = {
   },
   view = {
     default = {
-      layout = "diff2_horizontal",
+      layout = "diff1_inline",
       disable_diagnostics = false,
       winbar_info = false,
     },
@@ -66,7 +66,7 @@ M.defaults = {
       winbar_info = true,
     },
     file_history = {
-      layout = "diff2_horizontal",
+      layout = "diff1_inline",
       disable_diagnostics = false,
       winbar_info = false,
     },
