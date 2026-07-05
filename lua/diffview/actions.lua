@@ -164,6 +164,93 @@ function M.goto_file_tab()
   end
 end
 
+---In a unified diff buffer: open the real file for editing, at the source
+---line mapped from the cursor line. Falls back to `goto_file_edit` in other
+---layouts.
+function M.jump_to_edit()
+  local view = lib.get_current_view()
+
+  if not (view and view:instanceof(StandardView.__get())) then return end
+  ---@cast view StandardView
+
+  local main = view.cur_layout:get_main_win()
+  if not main:is_valid() then return end
+
+  local unified = require("diffview.scene.layouts.unified_render")
+  local buf = api.nvim_win_get_buf(main.id)
+
+  if not unified.state[buf] then
+    return M.goto_file_edit()
+  end
+
+  local file = view.cur_entry
+  if not file then return end
+
+  if not pl:readable(file.absolute_path) then
+    utils.err(("File does not exist on disk: '%s'"):format(pl:relative(file.absolute_path, ".")))
+    return
+  end
+
+  local cursor = api.nvim_win_get_cursor(main.id)
+  local target = unified.edit_target(buf, cursor[1]) or 1
+
+  local target_tab = lib.get_prev_non_view_tabpage()
+
+  if target_tab then
+    api.nvim_set_current_tabpage(target_tab)
+    file.layout:restore_winopts()
+    vim.cmd("edit " .. vim.fn.fnameescape(file.absolute_path))
+  else
+    vim.cmd("tabnew")
+    local temp_bufnr = api.nvim_get_current_buf()
+    file.layout:restore_winopts()
+    vim.cmd("keepalt edit " .. vim.fn.fnameescape(file.absolute_path))
+
+    if temp_bufnr ~= api.nvim_get_current_buf() then
+      api.nvim_buf_delete(temp_bufnr, { force = true })
+    end
+  end
+
+  utils.set_cursor(0, target, cursor[2])
+end
+
+---@param dir integer 1 or -1
+local function unified_hunk_nav(dir)
+  local view = lib.get_current_view()
+
+  if not (view and view:instanceof(StandardView.__get())) then return end
+  ---@cast view StandardView
+
+  local main = view.cur_layout:get_main_win()
+  if not main:is_valid() then return end
+
+  local unified = require("diffview.scene.layouts.unified_render")
+  local buf = api.nvim_win_get_buf(main.id)
+
+  if not unified.state[buf] then
+    -- Not a unified diff buffer: preserve the native diff-mode motion.
+    pcall(vim.cmd, "norm! " .. (dir > 0 and "]c" or "[c"))
+    return
+  end
+
+  local row = api.nvim_win_get_cursor(main.id)[1]
+  local target = unified.next_hunk_row(buf, row, dir)
+
+  if target then
+    utils.set_cursor(main.id, target, 0)
+  end
+end
+
+---Jump to the next hunk in a unified diff buffer.
+function M.next_hunk()
+  unified_hunk_nav(1)
+end
+
+---Jump to the previous hunk in a unified diff buffer.
+function M.prev_hunk()
+  unified_hunk_nav(-1)
+end
+
 ---@class diffview.ConflictCount
 ---@field total integer
 ---@field current integer

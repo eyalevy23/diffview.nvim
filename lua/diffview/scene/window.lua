@@ -242,6 +242,7 @@ function Window:_is_file_in_use()
 end
 
 function Window:_save_winopts()
+  if not self.file then return end
   if Window.winopt_store[self.file.bufnr] then return end
 
   Window.winopt_store[self.file.bufnr] = {}
@@ -254,7 +255,8 @@ end
 
 function Window:_restore_winopts()
   if
-    Window.winopt_store[self.file.bufnr]
+    self.file
+    and Window.winopt_store[self.file.bufnr]
     and api.nvim_buf_is_loaded(self.file.bufnr)
     and not self:_is_file_in_use()
   then

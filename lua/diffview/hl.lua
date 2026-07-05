@@ -466,6 +466,10 @@ M.hl_links = {
   DiffDelete = "DiffDelete",
   DiffChange = "DiffChange",
   DiffText = "DiffText",
+  UnifiedNumOld = "LineNr",
+  UnifiedNumNew = "LineNr",
+  UnifiedSignAdd = "diffAdded",
+  UnifiedSignDel = "diffRemoved",
 }
 
 function M.update_diff_hl()

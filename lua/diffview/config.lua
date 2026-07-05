@@ -7,6 +7,7 @@ local lazy = require("diffview.lazy")
 
 local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Diff1|LazyModule
 local Diff1Inline = lazy.access("diffview.scene.layouts.diff_1_inline", "Diff1Inline") ---@type Diff1Inline|LazyModule
+local Diff1Unified = lazy.access("diffview.scene.layouts.diff_1_unified", "Diff1Unified") ---@type Diff1Unified|LazyModule
 local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Diff2|LazyModule
 local Diff2Hor = lazy.access("diffview.scene.layouts.diff_2_hor", "Diff2Hor") ---@type Diff2Hor|LazyModule
 local Diff2Ver = lazy.access("diffview.scene.layouts.diff_2_ver", "Diff2Ver") ---@type Diff2Ver|LazyModule
@@ -56,7 +57,7 @@ M.defaults = {
   },
   view = {
     default = {
-      layout = "diff1_inline",
+      layout = "diff1_unified",
       disable_diagnostics = false,
       winbar_info = false,
     },
@@ -66,7 +67,7 @@ M.defaults = {
       winbar_info = true,
     },
     file_history = {
-      layout = "diff1_inline",
+      layout = "diff1_unified",
       disable_diagnostics = false,
       winbar_info = false,
     },
@@ -128,6 +129,9 @@ M.defaults = {
       { "n", "[F",          actions.select_first_entry,             { desc = "Open the diff for the first file" } },
       { "n", "]F",          actions.select_last_entry,              { desc = "Open the diff for the last file" } },
       { "n", "gf",          actions.goto_file_edit,                 { desc = "Open the file in the previous tabpage" } },
+      { "n", "T",           actions.jump_to_edit,                   { desc = "Open the real file for editing at the mapped diff line" } },
+      { "n", "]c",          actions.next_hunk,                      { desc = "Jump to the next hunk" } },
+      { "n", "[c",          actions.prev_hunk,                      { desc = "Jump to the previous hunk" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",     actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
       { "n", "<leader>e",   actions.focus_files,                    { desc = "Bring focus to the file panel" } },
@@ -378,6 +382,7 @@ end
 
 ---@alias LayoutName "diff1_plain"
 ---       | "diff1_inline"
+---       | "diff1_unified"
 ---       | "diff2_horizontal"
 ---       | "diff2_vertical"
 ---       | "diff3_horizontal"
@@ -388,6 +393,7 @@ end
 local layout_map = {
   diff1_plain = Diff1,
   diff1_inline = Diff1Inline,
+  diff1_unified = Diff1Unified,
   diff2_horizontal = Diff2Hor,
   diff2_vertical = Diff2Ver,
   diff3_horizontal = Diff3Hor,
@@ -577,7 +583,7 @@ function M.setup(user_config)
   do
     -- Validate layouts
     local view = M._config.view
-    local standard_layouts = { "diff2_horizontal", "diff2_vertical", "diff1_inline", -1 }
+    local standard_layouts = { "diff2_horizontal", "diff2_vertical", "diff1_inline", "diff1_unified", -1 }
     local merge_layuots = {
       "diff1_plain",
       "diff3_horizontal",
