@@ -226,10 +226,8 @@ COMMANDS                                        *diffview-commands*
             :'<,'>DiffviewFileHistory
 <
 
-    What options are available will be determined by what type of repository
-    you're targeting. You will find the available options for the supported
-    VCS tools below. The command completion will do it's best to suggest the
-    appropriate options.
+    The command completion will do it's best to suggest the appropriate
+    options.
 
     Git Options: ~
         --base={git-rev}
@@ -333,40 +331,6 @@ COMMANDS                                        *diffview-commands*
                 YYYY-mm-dd, YYYY-mm-dd HH:mm:ss, or natural language (for
                 instance "2 weeks 6 hours 12 minutes ago")
 
-    Mercurial Options: ~
-
-        --rev={rev}
-                Show only commits for the specified revset {rev}.
-                See `hg help revsets` for the full list of keywords and
-                constructs.
-
-        -f, --follow
-                Follow renames (only for single file).
-
-        -l{n}, --limit={n}
-                Limit the number of commits.
-
-        -M, --no-merges
-                Do not list merge commits.
-
-        --user={text}
-                Limit the commits to ones with user as specified.
-
-        --keyword={text}
-                Limit commits to ones matching the {text} in the log message.
-
-        --branch={text}
-                Limit commits to a specified branch.
-
-        --bookmark={text}
-                Limit commits to a specified bookmark
-
-        --include={pattern}
-                Include commits touching files as specified in the {pattern}.
-
-        --exclude={pattern}
-                Exclude commits touching files as specified in the {pattern}.
-
                                                 *:DiffviewClose*
 :DiffviewClose          Close the active Diffview.
 
@@ -383,6 +347,16 @@ COMMANDS                                        *diffview-commands*
                                                 *:DiffviewLog*
 :DiffviewLog            Open the debug log.
 
+                                                *:DiffviewReview*
+:DiffviewReview [subcommand]
+
+        Manage the review comments for the repository targeted by the current
+        Diffview. See |diffview-comments|. [subcommand] can be one of:
+
+            • `list` (default): Echo all comment threads in the review.
+            • `clear`: Delete all comment threads.
+            • `resolve-all`: Mark all open threads as resolved.
+
 ==============================================================================
 
 CONFIGURATION                                   *diffview-config*
@@ -393,27 +367,6 @@ EXAMPLE CONFIGURATION WITH DEFAULT SETTINGS: |diffview.defaults|
 
 
 
-enhanced_diff_hl                                *diffview-config-enhanced_diff_hl*
-        Type: `boolean`, Default: `false`
-
-        Enable/disable enhanced diff highlighting. This option has slightly
-        different effects in different |diffview-layouts|.
-
-        In all layouts: highlight delete fill-chars more subtly. These chars
-            are used as filler in places where other diff buffers have
-            insertions at that postion. Unfortunately many color schemes give
-            it a distracting highlight, such as a bright red. This makes diffs
-            more difficult to visually parse, as your eyes get drawn towards
-            the bright red areas of your display with absolutely no
-            information in them.
-
-        In `diff2*` layouts: show |hl-DiffAdd| as |hl-DiffDelete| in the
-            buffer representing the old state. This makes the highlighting
-            more inline with how 2-way diffs are displayed in other diff
-            tools. As - in a 2-way diff - an "insertion" in the old state
-            actually represents a deletion from the perspective of the new
-            state.
-
 git_cmd                                         *diffview-config-git_cmd*
         Type: `string[]`, Default: `{ "git" }`
 
@@ -421,21 +374,11 @@ git_cmd                                         *diffview-config-git_cmd*
         the plugin. The first element should be the Git binary. The subsequent
         elements are passed as arguments.
 
-hg_cmd                                          *diffview-config-hg_cmd*
-        Type: `string[]`, Default: `{ "hg" }`
-
-        This table forms the first part of all Mercurial commands used
-        internally in the plugin. The first element should be the Mercurial
-        binary. The subsequent elements are passed as arguments.
-
-        If your Mercurial install bundles the `chg` binary, this can be
-        configured here to have a significant performance boost.
-
 view.x.layout                                   *diffview-config-view.x.layout*
         Type: >
-            "diff1_plain"
-                | "diff2_horizontal"
-                | "diff2_vertical"
+            "diff1_inline"
+                | "diff1_unified"
+                | "diff1_plain"
                 | "diff3_horizontal"
                 | "diff3_vertical"
                 | "diff3_mixed"
@@ -446,11 +389,13 @@ view.x.layout                                   *diffview-config-view.x.layout*
 
         This determines the layout used for diffs in the various different
         views. Some of the layouts are only applicable to certain types of
-        views.
+        views. The valid layouts for `view.default` and `view.file_history`
+        are `"diff1_inline"`, `"diff1_unified"` and `-1`. The remaining
+        layouts are for `view.merge_tool`.
 
-        If you set the layout to `-1`, the layout type will be derived from
-        your |'diffopt'| (more specifically: whether or not you have
-        `vertical` set).
+        If you set the layout to `-1`, the default layout is used. For the
+        merge-tool the layout type is then derived from your |'diffopt'|
+        (more specifically: whether or not you have `vertical` set).
 
         Layouts: ~
             Unless otherwise stated, the window symbols (A, B, C, D) represent
@@ -483,25 +428,51 @@ view.x.layout                                   *diffview-config-view.x.layout*
                 │              │
                 └──────────────┘
 
-            {diff2_horizontal}
+            {diff1_inline}
                 Available for: diff_view, file_history_view
 
-                ┌──────┬───────┐
-                │      │       │
-                │      │       │
-                │  A   │   B   │
-                │      │       │
-                │      │       │
-                └──────┴───────┘
-
-            {diff2_vertical}
-                Available for: diff_view, file_history_view
+                A single window showing the new version of the file, with
+                deleted lines rendered inline as virtual lines, and
+                word-level diff highlights.
 
                 ┌──────────────┐
-                │      A       │
                 │              │
-                ├──────────────┤
+                │              │
                 │      B       │
+                │              │
+                │              │
+                └──────────────┘
+
+            {diff1_unified}
+                Available for: diff_view, file_history_view
+
+                                                *diffview-unified*
+                The default layout. A single window rendering the diff into a
+                read-only scratch buffer where context, added, and deleted
+                lines are all real, selectable buffer lines - yanking deleted
+                code works like in any other buffer. A dual gutter shows
+                `old# new# ±` via 'statuscolumn' (requires Neovim >= 0.9).
+                Word-level diff highlights and per-line Treesitter colors are
+                sourced from the underlying buffers. Unchanged regions fold
+                to "─── ··· N unchanged lines ···", and the normal fold keys
+                (|zo|, |zc|, ...) work on them.
+
+                Default mappings in the view:
+
+                    `T`         Open the real file for editing at the line
+                              mapped from the cursor position
+                              (|diffview-actions-jump_to_edit|).
+                    `]c` / `[c`   Jump to the next / previous hunk.
+
+                The buffer is read-only by design: editing happens in the
+                real file via `T`, and the view re-renders live whenever the
+                file changes.
+
+                ┌──────────────┐
+                │              │
+                │              │
+                │      B       │
+                │              │
                 │              │
                 └──────────────┘
 
@@ -940,6 +911,24 @@ close_fold                                      *diffview-actions-close_fold*
 
         Collapse the fold of the subject.
 
+comment_apply                                   *diffview-actions-comment_apply*
+        Contexts: `diff_view`
+
+        Apply the suggestion block of the comment thread on the current line
+        to the real file. See |diffview-comments|.
+
+comment_open                                    *diffview-actions-comment_open*
+        Contexts: `diff_view`
+
+        Reply to the comment thread on the current line, or start a new
+        thread if there is none. See |diffview-comments|.
+
+comment_resolve                                 *diffview-actions-comment_resolve*
+        Contexts: `diff_view`
+
+        Toggle the resolved status of the comment thread on the current line.
+        See |diffview-comments|.
+
 conflict_choose({version})                      *diffview-actions-conflict_choose*
         Contexts: `merge_tool`
 
@@ -1040,6 +1029,13 @@ goto_file_tab                                   *diffview-actions-goto_file_tab*
         |diffview-file-inference| for details on how the file target is
         determined.
 
+jump_to_edit                                    *diffview-actions-jump_to_edit*
+        Contexts: `diff_view`, `file_history_view`
+
+        Open the real file for editing, at the line mapped from the cursor
+        position in the diff. Mainly useful in the single window layouts
+        (|diffview-unified|), where the diff buffer itself is read-only.
+
 jumpto_conflict({num}, {use_delta})             *diffview-actions-jumpto_conflict*
         Contexts: `diff_view`, `file_panel`
 
@@ -1063,6 +1059,12 @@ listing_style                                   *diffview-actions-listing_style*
         Cycle through the available listing styles. The currently available
         styles are: file tree and flat list.
 
+next_comment                                    *diffview-actions-next_comment*
+        Contexts: `diff_view`
+
+        Move the cursor to the next comment thread in the current file. See
+        |diffview-comments|.
+
 next_conflict                                   *diffview-actions-next_conflict*
         Contexts: `diff_view`, `file_panel`
 
@@ -1076,6 +1078,11 @@ next_entry                                      *diffview-actions-next_entry*
         Contexts: `view`, `panel`
 
         Bring the cursor in the subject panel to the next entry.
+
+next_hunk                                       *diffview-actions-next_hunk*
+        Contexts: `diff_view`, `file_history_view`
+
+        Jump to the next hunk in the current diff.
 
 open_all_folds                                  *diffview-actions-open_all_folds*
         Contexts: `file_panel`, `file_history_panel`
@@ -1103,6 +1110,12 @@ options                                         *diffview-actions-options*
 
         Open the option panel for the subject.
 
+prev_comment                                    *diffview-actions-prev_comment*
+        Contexts: `diff_view`
+
+        Move the cursor to the previous comment thread in the current file.
+        See |diffview-comments|.
+
 prev_conflict                                   *diffview-actions-prev_conflict*
         Contexts: `diff_view`, `file_panel`
 
@@ -1116,6 +1129,11 @@ prev_entry                                      *diffview-actions-prev_entry*
         Contexts: `view`, `panel`
 
         Bring the cursor in the subject panel to the previous entry.
+
+prev_hunk                                       *diffview-actions-prev_hunk*
+        Contexts: `diff_view`, `file_history_view`
+
+        Jump to the previous hunk in the current diff.
 
 refresh_files                                   *diffview-actions-refresh_files*
         Contexts: `view`, `panel`
@@ -1344,6 +1362,31 @@ gf                      Open the local version of the file in a different
                         See |diffview-file-inference| for details on how the
                         file target is determined.
 
+                                                *diffview-maps-jump_to_edit*
+T                       Open the real file for editing at the line mapped
+                        from the cursor position in the diff. See
+                        |diffview-actions-jump_to_edit|.
+
+                                                *diffview-maps-next_hunk*
+]c                      Jump to the next hunk in the current diff.
+
+                                                *diffview-maps-prev_hunk*
+[c                      Jump to the previous hunk in the current diff.
+
+                                                *diffview-maps-comments*
+<CR>                    Reply to the comment thread on the cursor line, or
+                        start a new one. See |diffview-comments|.
+
+]t                      Jump to the next comment thread.
+
+[t                      Jump to the previous comment thread.
+
+<leader>cd              Toggle resolved on the comment thread under the
+                        cursor.
+
+<leader>cs              Apply the suggestion of the comment thread under the
+                        cursor to the real file.
+
                                                 *diffview-maps-goto_file_split*
 <C-w><C-f>              Open the local version of the file in a new split. See
                         |diffview-file-inference| for details on how the
@@ -1462,107 +1505,90 @@ panel, preceding the flags' descriptions.
 
 ==============================================================================
 
-API                                             *diffview-api*
+REVIEW COMMENTS                                 *diffview-comments*
 
-Diffview provides an API that lets plugins supply custom file data to create
-custom diffviews.
+Diffview supports GitHub-style threaded review comments, anchored to the
+lines of the diff in the unified layout (|diffview-unified|).
 
-Example usage:
-https://gist.github.com/sindrets/b750723f5f23182904f70a6274106304
+The comments are stored in `<git-dir>/diffview-review.json`. The file lives
+inside the git directory, so it is never committed. It is automatically
+garbage collected with hard caps of ~200 threads / 512 KB, and resolved
+threads expire after 7 days.
 
-CDiffView                                       *diffview.api.views.diff.diff_view.CDiffView*
+                                                *diffview-comments-ai*
+The review is designed to be AI-collaborative: both the human (in Neovim) and
+an AI agent (e.g. Claude, via the bundled `.claude/skills/diff-review` skill)
+read and write the same review file. Neovim watches the file and renders
+external writes live, so an agent's comments and replies show up in the view
+as they are written.
 
-        Class that represents a custom Diffview.
+Each anchor stores the text of the line it is attached to, so comment
+threads survive edits to the file (drift re-anchoring).
 
-        CDiffView({opt})
+A comment can carry a suggestion block (a proposed replacement for the
+anchored lines). The suggestion can be applied to the real file with a
+single key.
 
-            Parameters: ~
-                {opt} (table)
-                    Table containing the args passed to the view constructor.
+Default mappings in the view:
 
-            Fields: ~
-                {git_toplevel} (string)
-                    Absolute path to the toplevel git directory.
+        `<CR>`        Reply to the thread on the cursor line, or start a new
+                    one. Opens an input float: `<C-s>` submits, `q` cancels.
+        `]t` / `[t`     Jump to the next / previous comment thread.
+        `<leader>cd`  Toggle resolved on the thread under the cursor.
+        `<leader>cs`  Apply the thread's suggestion block to the real file.
 
-                {left} (Rev)
-                    The git rev representing the left window in the diffview.
+The review can be managed with the |:DiffviewReview| command: >vim
 
-                {right} (Rev)
-                    The git rev representing the right window in the diffview.
+        :DiffviewReview {list|clear|resolve-all}
+<
+The file panel shows a per-file badge with the number of open threads
+(`🗨N`).
 
-                {files} (FileDict)
-                    List of file data used to create the file entries in the
-                    view.
+==============================================================================
 
-                {update_files} (function)
-                    This function should return an updated list of `FileData`, and
-                    is called from `View:update_files`.
+HIGHLIGHTS                                      *diffview-highlights*
 
-                    Parameters: ~
-                        {view} (CDiffView)
-                            The CDiffView object that called the function.
+All the highlight groups used by the plugin follow the `Diffview*` naming
+pattern, and are link-based: they link to sensible builtin groups by default,
+and can be overridden to customize the appearance.
 
+Groups used by the unified layout (|diffview-unified|):
 
-                {get_file_data} (function)
-                    This should return a list of lines that make up the buffer
-                    indicated by `path` and `split`.
+        `DiffviewUnifiedNumOld`         Old line numbers in the dual gutter.
+                                      Links to |hl-LineNr|.
+        `DiffviewUnifiedNumNew`         New line numbers in the dual gutter.
+                                      Links to |hl-LineNr|.
+        `DiffviewUnifiedSignAdd`        The `+` sign for added lines. Links to
+                                      `diffAdded`.
+        `DiffviewUnifiedSignDel`        The `-` sign for deleted lines. Links
+                                      to `diffRemoved`.
 
-                    Parameters: ~
-                        {kind} ("working"|"staged"|"conflicting")
-                        {path} (string)             Path to the file, relative to
-                                                    git root.
-                        {split} ("left"|"right")
+Groups used by the review comments (|diffview-comments|):
 
-FileDict                                        *diffview.git.FileDict*
+        `DiffviewCommentBorder`         Thread border. Links to
+                                      |hl-FloatBorder|.
+        `DiffviewCommentTitle`          Thread title. Links to |hl-Title|.
+        `DiffviewCommentBody`           Comment body text. Links to
+                                      |hl-NormalFloat|.
+        `DiffviewCommentDim`            De-emphasized meta info (timestamps,
+                                      counts). Links to `Comment`.
+        `DiffviewCommentOutdated`       Threads whose anchor no longer
+                                      matches. Links to `Comment`.
+        `DiffviewCommentAuthorHuman`    Human comment authors. Links to
+                                      `Identifier`.
+        `DiffviewCommentAuthorAI`       AI comment authors. Links to
+                                      `Special`.
+        `DiffviewCommentSuggestion`     Suggestion blocks. Links to
+                                      `diffAdded`.
+        `DiffviewCommentSignApplied`    Sign for threads whose suggestion has
+                                      been applied. Links to `diffAdded`.
+        `DiffviewCommentCount`          The open-thread badge in the file
+                                      panel. Links to
+                                      `DiffviewFilePanelCounter`.
 
-        Fields: ~
-            {working} (FileData[])
-            {staged}  (FileData[])
-            {conflicting} (FileData[])
+==============================================================================
 
-FileData                                        *diffview.api.views.diff.diff_view.FileData*
-
-        Table that contains the metadata used to create file entries.
-
-        Fields: ~
-            {path} (string)
-                Path relative to git root.
-
-            {oldpath} (string|nil)
-                If the file has been renamed, this should be the old path,
-                otherwise nil.
-
-            {status} (string)
-                Git status symbol. Can be one of: `A`, `?`, `M`, `R`, `C`,
-                `T`, `U`, `X`, `D`, `B` See `:Man git-status(1)` for the
-                definition of the different symbols.
-
-            {stats} (GitStats|nil)
-                Table describing number of additions and deletions in the
-                file.
-
-            {left_null} (boolean)
-                If true, indicates that the left diff buffer should be
-                represented by the null buffer.
-
-            {right_null} (boolean)
-                If true, indicates that the right diff buffer should be
-                represented by the null buffer.
-
-            {selected} (boolean)
-                If true, indicates that this should be the initially selected
-                file.
-
-GitStats                                        *diffview.views.file_entry.GitStats*
-
-        Table describing number of additions and deletions in a file.
-
-        Fields: ~
-            {additions} (integer)
-                Number of additons in the file.
-
-            {deletions} (integer)
-                Number of deletions in the file.
+TYPES                                           *diffview-types*
 
 LogOptions                                      *diffview.git.LogOptions*
 

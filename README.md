@@ -13,11 +13,23 @@ up all modified files in a diffsplit. This plugin aims to provide a simple,
 unified, single tabpage interface that lets you easily review all changed files
 for any git rev.
 
+Highlights of this fork:
+
+- **Unified review layout (`diff1_unified`, the default):** a single-window,
+  patch-style diff rendered into a read-only buffer where added *and* deleted
+  lines are real, selectable lines — with a dual line-number gutter, word-level
+  diff highlights, Treesitter colors, folded unchanged regions, and `T` to jump
+  to the real file for editing.
+- **AI-collaborative review comments:** GitHub-style threaded comments anchored
+  to diff lines, stored in a shared review file that both you (in Neovim) and an
+  AI agent (e.g. Claude, via the bundled `diff-review` skill) can read and
+  write — including one-key application of suggestion blocks.
+
 ## Requirements
 
-- Git ≥ 2.31.0 (for Git support)
-- Mercurial ≥ 5.4.0 (for Mercurial support)
-- Neovim ≥ 0.7.0 (with LuaJIT)
+- Git ≥ 2.31.0
+- Neovim ≥ 0.9.0 (with LuaJIT) — the default unified layout uses
+  `'statuscolumn'`
 - [nvim-web-devicons](https://github.com/nvim-tree/nvim-web-devicons) (optional) For file icons
 
 ## Installation
@@ -183,9 +195,7 @@ local actions = require("diffview.actions")
 
 require("diffview").setup({
   diff_binaries = false,    -- Show diffs for binaries
-  enhanced_diff_hl = false, -- See |diffview-config-enhanced_diff_hl|
   git_cmd = { "git" },      -- The git executable followed by default args.
-  hg_cmd = { "hg" },        -- The hg executable followed by default args.
   use_icons = true,         -- Requires nvim-web-devicons
   show_help_hints = true,   -- Show hints for how to open the help panel
   watch_index = true,       -- Update views and index buffers when the git index changes.
@@ -201,9 +211,9 @@ require("diffview").setup({
   view = {
     -- Configure the layout and behavior of different types of views.
     -- Available layouts:
-    --  'diff1_plain'
-    --    |'diff2_horizontal'
-    --    |'diff2_vertical'
+    --  'diff1_inline'
+    --    |'diff1_unified'
+    --    |'diff1_plain'
     --    |'diff3_horizontal'
     --    |'diff3_vertical'
     --    |'diff3_mixed'
@@ -211,7 +221,7 @@ require("diffview").setup({
     -- For more info, see |diffview-config-view.x.layout|.
     default = {
       -- Config for changed files, and staged files in diff views.
-      layout = "diff2_horizontal",
+      layout = "diff1_unified",
       disable_diagnostics = false,  -- Temporarily disable diagnostics for diff buffers while in the view.
       winbar_info = false,          -- See |diffview-config-view.x.winbar_info|
     },
@@ -223,7 +233,7 @@ require("diffview").setup({
     },
     file_history = {
       -- Config for changed files in file history views.
-      layout = "diff2_horizontal",
+      layout = "diff1_unified",
       disable_diagnostics = false,  -- Temporarily disable diagnostics for diff buffers while in the view.
       winbar_info = false,          -- See |diffview-config-view.x.winbar_info|
     },
@@ -244,15 +254,12 @@ require("diffview").setup({
     log_options = {   -- See |diffview-config-log_options|
       git = {
         single_file = {
-          diff_merges = "combined",
+          diff_merges = "first-parent",
+          follow = true,
         },
         multi_file = {
           diff_merges = "first-parent",
         },
-      },
-      hg = {
-        single_file = {},
-        multi_file = {},
       },
     },
     win_config = {    -- See |diffview-config-win_config|
@@ -279,6 +286,14 @@ require("diffview").setup({
       { "n", "[F",          actions.select_first_entry,             { desc = "Open the diff for the first file" } },
       { "n", "]F",          actions.select_last_entry,              { desc = "Open the diff for the last file" } },
       { "n", "gf",          actions.goto_file_edit,                 { desc = "Open the file in the previous tabpage" } },
+      { "n", "T",           actions.jump_to_edit,                   { desc = "Open the real file for editing at the mapped diff line" } },
+      { "n", "]c",          actions.next_hunk,                      { desc = "Jump to the next hunk" } },
+      { "n", "[c",          actions.prev_hunk,                      { desc = "Jump to the previous hunk" } },
+      { "n", "<cr>",        actions.comment_open,                   { desc = "Comment: reply to the thread here, or start a new one" } },
+      { "n", "]t",          actions.next_comment,                   { desc = "Jump to the next comment thread" } },
+      { "n", "[t",          actions.prev_comment,                   { desc = "Jump to the previous comment thread" } },
+      { "n", "<leader>cd",  actions.comment_resolve,                { desc = "Comment: toggle resolved on the thread here" } },
+      { "n", "<leader>cs",  actions.comment_apply,                  { desc = "Comment: apply the suggestion of the thread here" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",     actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
       { "n", "<leader>e",   actions.focus_files,                    { desc = "Bring focus to the file panel" } },
@@ -332,7 +347,6 @@ require("diffview").setup({
       { "n", "S",              actions.stage_all,                      { desc = "Stage all entries" } },
       { "n", "U",              actions.unstage_all,                    { desc = "Unstage all entries" } },
       { "n", "X",              actions.restore_entry,                  { desc = "Restore entry to the state on the left side" } },
-      { "n", "L",              actions.open_commit_log,                { desc = "Open the commit log panel" } },
       { "n", "zo",             actions.open_fold,                      { desc = "Expand fold" } },
       { "n", "h",              actions.close_fold,                     { desc = "Collapse fold" } },
       { "n", "zc",             actions.close_fold,                     { desc = "Collapse fold" } },
@@ -367,7 +381,6 @@ require("diffview").setup({
       { "n", "g!",            actions.options,                     { desc = "Open the option panel" } },
       { "n", "<C-A-d>",       actions.open_in_diffview,            { desc = "Open the entry under the cursor in a diffview" } },
       { "n", "y",             actions.copy_hash,                   { desc = "Copy the commit hash of the entry under the cursor" } },
-      { "n", "L",             actions.open_commit_log,             { desc = "Show commit details" } },
       { "n", "X",             actions.restore_entry,               { desc = "Restore file to the state from the selected entry" } },
       { "n", "zo",            actions.open_fold,                   { desc = "Expand fold" } },
       { "n", "zc",            actions.close_fold,                  { desc = "Collapse fold" } },
