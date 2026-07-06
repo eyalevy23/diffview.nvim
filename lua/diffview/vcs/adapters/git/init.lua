@@ -1,6 +1,6 @@
 local AsyncListStream = require("diffview.stream").AsyncListStream
 local Commit = require("diffview.vcs.adapters.git.commit").GitCommit
-local Diff2Hor = require("diffview.scene.layouts.diff_2_hor").Diff2Hor
+local Diff1Unified = require("diffview.scene.layouts.diff_1_unified").Diff1Unified
 local FileEntry = require("diffview.scene.file_entry").FileEntry
 local FlagOption = require("diffview.vcs.flag_option").FlagOption
 local GitRev = require("diffview.vcs.adapters.git.rev").GitRev
@@ -1171,7 +1171,7 @@ function GitAdapter:parse_fh_data(data, commit, state)
     table.insert(
       files,
       FileEntry.with_layout(
-        state.layout_opt.default_layout or Diff2Hor,
+        state.layout_opt.default_layout or Diff1Unified,
         {
           adapter = self,
           path = name,
@@ -1229,7 +1229,7 @@ function GitAdapter:parse_fh_line_trace_data(data, commit, state)
 
     table.insert(
       files,
-      FileEntry.with_layout(state.layout_opt.default_layout or Diff2Hor,
+      FileEntry.with_layout(state.layout_opt.default_layout or Diff1Unified,
         {
           adapter = self,
           path = entry.path_new,

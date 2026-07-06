@@ -9,8 +9,6 @@ local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Dif
 local Diff1Inline = lazy.access("diffview.scene.layouts.diff_1_inline", "Diff1Inline") ---@type Diff1Inline|LazyModule
 local Diff1Unified = lazy.access("diffview.scene.layouts.diff_1_unified", "Diff1Unified") ---@type Diff1Unified|LazyModule
 local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Diff2|LazyModule
-local Diff2Hor = lazy.access("diffview.scene.layouts.diff_2_hor", "Diff2Hor") ---@type Diff2Hor|LazyModule
-local Diff2Ver = lazy.access("diffview.scene.layouts.diff_2_ver", "Diff2Ver") ---@type Diff2Ver|LazyModule
 local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
 local Diff3Hor = lazy.access("diffview.scene.layouts.diff_3_hor", "Diff3Hor") ---@type Diff3Hor|LazyModule
 local Diff3Mixed = lazy.access("diffview.scene.layouts.diff_3_mixed", "Diff3Mixed") ---@type Diff3Mixed|LazyModule
@@ -359,8 +357,6 @@ end
 ---@alias LayoutName "diff1_plain"
 ---       | "diff1_inline"
 ---       | "diff1_unified"
----       | "diff2_horizontal"
----       | "diff2_vertical"
 ---       | "diff3_horizontal"
 ---       | "diff3_vertical"
 ---       | "diff3_mixed"
@@ -370,8 +366,6 @@ local layout_map = {
   diff1_plain = Diff1,
   diff1_inline = Diff1Inline,
   diff1_unified = Diff1Unified,
-  diff2_horizontal = Diff2Hor,
-  diff2_vertical = Diff2Ver,
   diff3_horizontal = Diff3Hor,
   diff3_vertical = Diff3Ver,
   diff3_mixed = Diff3Mixed,
@@ -559,7 +553,7 @@ function M.setup(user_config)
   do
     -- Validate layouts
     local view = M._config.view
-    local standard_layouts = { "diff2_horizontal", "diff2_vertical", "diff1_inline", "diff1_unified", -1 }
+    local standard_layouts = { "diff1_inline", "diff1_unified", -1 }
     local merge_layuots = {
       "diff1_plain",
       "diff3_horizontal",
