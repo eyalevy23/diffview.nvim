@@ -95,6 +95,10 @@ review file through a bundled lock-safe helper.
 > write the same threads). Each works without the other, but they're designed
 > as a pair.
 
+After the one-time trust step (the workspace-trust dialog for a cloned repo,
+or the plugin-install confirmation), the review loop runs **without
+per-command approval prompts** — the skill carries its own tool permission.
+
 ### Comment keymaps (in the diff)
 
 | Key | Action |

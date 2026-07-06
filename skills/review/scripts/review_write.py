@@ -18,9 +18,15 @@ is an external writer — Neovim's watcher must see the write and reload; GC
 runs on the Neovim side.
 
 Usage:
-    review_write.py <review-file>      # ops JSON on stdin
+    review_write.py OPSFILE                    # ops JSON from a file
+    review_write.py - < ops.json               # ops JSON on stdin
+    review_write.py OPSFILE --review-file P    # explicit review-file override
 
-stdin is {"ops": [op, ...]} or a bare [op, ...]; each op is one of:
+The review file is derived automatically: `git rev-parse --git-dir` from the
+current directory -> <git-dir>/diffview-review.json. Use --review-file PATH
+to override (e.g. when running outside the repo).
+
+The ops payload is {"ops": [op, ...]} or a bare [op, ...]; each op is one of:
     {"op": "add_thread", "anchor": {...}, "body": "...", "suggestion": {...}?}
     {"op": "add_comment", "thread_id": "t-..", "body": "...", "suggestion": {...}?}
     {"op": "edit_comment", "comment_id": "c-..", "body": "..."}
@@ -40,6 +46,7 @@ On success stdout is JSON: {"ok": true, "minted": [...]}.
 import json
 import os
 import secrets
+import subprocess
 import sys
 import time
 
@@ -345,15 +352,59 @@ def apply_ops(doc, ops):
 
 # -- main ---------------------------------------------------------------------
 
-def main():
-    if len(sys.argv) != 2:
-        die(1, "usage: review_write.py <review-file>  (ops JSON on stdin)")
-    path = sys.argv[1]
-
+def derive_review_file():
     try:
-        payload = json.load(sys.stdin)
-    except ValueError as e:
-        die(1, "stdin is not valid JSON: %s" % e)
+        proc = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True, text=True, check=True)
+    except FileNotFoundError:
+        die(1, "git not found on PATH")
+    except subprocess.CalledProcessError:
+        die(1, "not in a git repository — run from inside the repo, "
+               "or pass --review-file PATH")
+    return os.path.join(proc.stdout.strip(), "diffview-review.json")
+
+
+def parse_args(argv):
+    ops_file, review_path = None, None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--review-file":
+            i += 1
+            if i >= len(argv):
+                die(1, "--review-file needs a path")
+            review_path = argv[i]
+        elif arg.startswith("--review-file="):
+            review_path = arg.split("=", 1)[1]
+        elif arg in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        elif ops_file is None:
+            ops_file = arg
+        else:
+            die(1, "unexpected argument: %s" % arg)
+        i += 1
+    return ops_file, review_path
+
+
+def main():
+    ops_file, review_path = parse_args(sys.argv[1:])
+    path = review_path if review_path is not None else derive_review_file()
+
+    if ops_file is None or ops_file == "-":
+        try:
+            payload = json.load(sys.stdin)
+        except ValueError as e:
+            die(1, "stdin is not valid JSON: %s" % e)
+    else:
+        try:
+            with open(ops_file, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except OSError as e:
+            die(1, "cannot read ops file %s: %s" % (ops_file, e))
+        except ValueError as e:
+            die(1, "ops file %s is not valid JSON: %s" % (ops_file, e))
 
     ops = payload.get("ops") if isinstance(payload, dict) else payload
     if not isinstance(ops, list) or not ops:

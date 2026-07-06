@@ -1,6 +1,7 @@
 ---
 name: diff-nvim-review
 description: Collaborate with the human on a code review through diffview.nvim's shared review file. Use when asked to "review my diff", "address my review comments", "reply to my comments", or anything about the diffview review loop. Reads/writes <git-dir>/diffview-review.json — threads anchored to source lines that both the human (in Neovim) and you read and write.
+allowed-tools: Bash(python3 *review_write.py *)
 ---
 
 # diff.nvim — the shared review loop
@@ -12,11 +13,10 @@ moment you write it — your comments appear in the editor live.
 
 ## The file
 
-```bash
-REVIEW_FILE="$(git rev-parse --git-dir)/diffview-review.json"
-```
-
-Read it directly (`cat`, `jq`). If it doesn't exist, there are no threads yet.
+The review file lives at `<git-dir>/diffview-review.json` — usually
+`.git/diffview-review.json` (find the git dir with `git rev-parse --git-dir`
+if unsure). Read it directly (`cat`, `jq`). If it doesn't exist, there are no
+threads yet. You never need its path to WRITE — the helper derives it.
 
 ## Schema (version 1) — read reference
 
@@ -58,23 +58,34 @@ Read it directly (`cat`, `jq`). If it doesn't exist, there are no threads yet.
 
 ## Writing — ONLY through the helper
 
-NEVER write `$REVIEW_FILE` yourself: no temp+`mv`, no in-place edits, no
+NEVER write the review file yourself: no temp+`mv`, no in-place edits, no
 `jq`/`sed` into the file. Neovim writes under a lock; the bundled helper
 takes the SAME lock, re-reads the file fresh, merges your ops, and writes
 atomically. A hand-rolled write races the human and silently loses their
 comments.
 
-The helper is bundled with this skill at `${CLAUDE_SKILL_DIR}/scripts/review_write.py`
-(`${CLAUDE_SKILL_DIR}` is this skill's own directory). Requires `python3` on
-PATH (stdlib only):
+Two steps, both prompt-free:
 
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/review_write.py" "$REVIEW_FILE" <<'EOF'
-{"ops": [
-  {"op": "set_summary", "summary": "Reviewed the working tree: 2 findings, none blocking."}
-]}
-EOF
-```
+1. **Write your ops JSON to a scratch file** with the Write tool — a
+   temp/scratch path, never inside the repo. Example content:
+
+   ```json
+   {"ops": [
+     {"op": "set_summary", "summary": "Reviewed the working tree: 2 findings, none blocking."}
+   ]}
+   ```
+
+2. **Run the helper on it** — one plain command, no heredoc, no `$(…)`, no
+   inline JSON. It locates the review file itself (via `git rev-parse`), so
+   run it from inside the repo:
+
+   ```bash
+   python3 "$CLAUDE_SKILL_DIR/scripts/review_write.py" /path/to/review-ops.json
+   ```
+
+   `$CLAUDE_SKILL_DIR` is this skill's directory — use this brace-free form.
+   Requires `python3` on PATH (stdlib only). `--review-file PATH` overrides
+   the derived location; `-` reads ops from stdin instead of a file.
 
 Build your ops FIRST, then run the helper — it holds the lock only for the
 instant of the write.
@@ -103,7 +114,9 @@ Anchor fields for `add_thread`: `path`, `side`, `rev`, `line`, `end_line?`,
 to keep the comment attached when the file changes), `ctx_before?`/`ctx_after?`
 (include when the lines exist).
 
-Example — reply with a concrete suggestion, and mark another thread applied:
+Example ops-file content — reply with a concrete suggestion, and mark
+another thread applied (write this to your scratch ops file, then run the
+helper on it):
 
 ```json
 {"ops": [
@@ -145,14 +158,17 @@ When asked to review:
 4. Quality over quantity: real defects, risky edges, and concrete
    simplifications. Skip style nits unless asked.
 
-## Live nudge (optional)
+## Appendix: optional instant-repaint nudge
 
-Neovim picks up your writes automatically via a file watcher. If you are
-running inside Neovim's terminal (`$NVIM` is set), you can make it instant:
+NOT part of the standard write flow — Neovim picks up your writes on its own
+via a file watcher (repaints within ~a quarter second). Only if `$NVIM` is
+set (you are running inside Neovim's terminal) AND an instant repaint
+matters, you may additionally run:
 
 ```bash
 [ -n "$NVIM" ] && nvim --server "$NVIM" --remote-expr \
   'luaeval("(function() local c = package.loaded[\"diffview.comments\"] if c then c.reload() end return 1 end)()")' || true
 ```
 
-Never treat a nudge failure as an error.
+Never treat a nudge failure as an error, and never let this command block a
+write — skip it freely.
