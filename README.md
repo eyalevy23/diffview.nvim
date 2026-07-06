@@ -22,7 +22,7 @@ Highlights of this fork:
   to the real file for editing.
 - **AI-collaborative review comments:** GitHub-style threaded comments anchored
   to diff lines, stored in a shared review file that both you (in Neovim) and an
-  AI agent (e.g. Claude, via the bundled `diff-review` skill) can read and
+  AI agent (e.g. Claude, via the bundled `diff-nvim-review` skill) can read and
   write — including one-key application of suggestion blocks.
 
 ## Requirements
@@ -45,6 +45,81 @@ Plug 'sindrets/diffview.nvim'
 -- Packer
 use "sindrets/diffview.nvim" 
 ```
+
+## AI review loop (diff.nvim)
+
+**diff.nvim** is this fork's human↔AI code-review loop. Comment threads are
+anchored to diff lines and stored in one JSON file per repo at
+`<git-dir>/diffview-review.json` (inside `.git` — never committed). Neovim
+renders the threads live in the unified diff via a file watcher; an AI agent
+(Claude Code, via the bundled `diff-nvim-review` skill) reads your comments,
+replies in-thread, attaches suggestion blocks you can apply with one key, and
+marks threads `applied` after changing code. Resolving a thread is always the
+human's call.
+
+### Install the AI side (global — one install, all your projects)
+
+Both routes install the skill **globally**: after one install, every project
+you open with your agent can read and write review comments. There is nothing
+to configure per repo — each repo automatically gets its own review file
+inside its `.git` directory.
+
+**Option 1 — one line, works for many agents** (Claude Code, Cursor, Codex,
+and more, via the [skills CLI](https://github.com/vercel-labs/skills)):
+
+```sh
+npx skills add eyalevy23/diffview.nvim
+```
+
+This installs the skill as `diff-nvim-review`. Re-run the same command any
+time to update it.
+
+**Option 2 — Claude Code plugin** (managed install, updates automatically on
+new commits):
+
+```
+/plugin marketplace add eyalevy23/diffview.nvim
+/plugin install diff-nvim
+```
+
+Invoke it directly as `/diff-nvim:review`.
+
+Either way you rarely need the command itself — just ask Claude to
+"review my diff" or "address my review comments" and the skill triggers
+automatically. Requires `python3` on PATH (stdlib only): the skill writes the
+review file through a bundled lock-safe helper.
+
+> **Pairing note:** these are two independent installs. This repo as a Neovim
+> plugin is the *human* side (renders and edits threads in the diff);
+> `diff-nvim` as a Claude Code plugin is the *AI* side (lets Claude read and
+> write the same threads). Each works without the other, but they're designed
+> as a pair.
+
+### Comment keymaps (in the diff)
+
+| Key | Action |
+|-----|--------|
+| `<CR>` | Reply to the thread on the line, or start a new one |
+| `]t` / `[t` | Next / previous thread |
+| `<leader>gcc` | Reply / new comment |
+| `<leader>gce` | Edit your own comment |
+| `<leader>gcr` | Toggle resolved |
+| `<leader>gca` | Apply the suggestion to the file |
+| `<leader>gcn` / `<leader>gcp` | Next / previous thread |
+| `<leader>gcD` | Delete ALL threads (asks first) |
+
+### For contributors: loading the skill from a clone
+
+- Working **inside this repo**: the skill auto-loads via project scope (the
+  `.claude/skills/diff-nvim-review` symlink → `skills/review`) — just run
+  Claude Code here and `/diff-nvim-review` is available.
+- To use it globally from your clone **without** the marketplace: run
+  `ln -s "$(pwd)/skills/review" ~/.claude/skills/diff-nvim-review` — Claude
+  Code follows the symlink and `${CLAUDE_SKILL_DIR}` resolves the bundled
+  helper, so it works in every project. Once you switch to the published
+  plugin, delete that symlink and use `/plugin install diff-nvim` instead —
+  one source of truth.
+- Either way, `python3` on PATH is required (same as the plugin install).
 
 ## Merge Tool
 

@@ -1,9 +1,9 @@
 ---
-name: diff-review
+name: diff-nvim-review
 description: Collaborate with the human on a code review through diffview.nvim's shared review file. Use when asked to "review my diff", "address my review comments", "reply to my comments", or anything about the diffview review loop. Reads/writes <git-dir>/diffview-review.json — threads anchored to source lines that both the human (in Neovim) and you read and write.
 ---
 
-# diff-review — the shared review loop
+# diff.nvim — the shared review loop
 
 You and the human are reviewing the same diff. The human reads and writes
 comments inside Neovim (diffview.nvim renders them on the unified diff); you
@@ -43,7 +43,7 @@ Read it directly (`cat`, `jq`). If it doesn't exist, there are no threads yet.
       "status": "open",                     // "open" | "resolved" | "applied"
       "created_at": "…", "updated_at": "…", // ISO-8601 UTC
       "comments": [
-        { "id": "c-1a", "author": "eyal",   "ts": "…", "body": "Why not async?" },
+        { "id": "c-1a", "author": "sam",    "ts": "…", "body": "Why not async?" },
         { "id": "c-2b", "author": "claude", "ts": "…", "body": "Good catch — suggestion below.",
           "suggestion": {                   // optional: a concrete replacement the human can apply with one key
             "replace_lines": [42, 43],      // 1-indexed inclusive range in the anchored file (at comment time)
@@ -64,10 +64,12 @@ takes the SAME lock, re-reads the file fresh, merges your ops, and writes
 atomically. A hand-rolled write races the human and silently loses their
 comments.
 
-The helper is `scripts/review_write.py`, next to this SKILL.md:
+The helper is bundled with this skill at `${CLAUDE_SKILL_DIR}/scripts/review_write.py`
+(`${CLAUDE_SKILL_DIR}` is this skill's own directory). Requires `python3` on
+PATH (stdlib only):
 
 ```bash
-python3 "<this-skill's-directory>/scripts/review_write.py" "$REVIEW_FILE" <<'EOF'
+python3 "${CLAUDE_SKILL_DIR}/scripts/review_write.py" "$REVIEW_FILE" <<'EOF'
 {"ops": [
   {"op": "set_summary", "summary": "Reviewed the working tree: 2 findings, none blocking."}
 ]}

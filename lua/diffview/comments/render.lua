@@ -109,50 +109,72 @@ local function build_box(thread, width, outdated)
   local inner = width - 4
   local lines = {}
 
-  local title = (" 🗨 %s%s "):format(thread.id, outdated and " (outdated)" or "")
-  local fill = math.max(0, width - 2 - vim.fn.strdisplaywidth(title))
+  ---Pad a line's chunks to the box width and close it with the right rail,
+  ---so every line lands at exactly `width` cells.
+  ---@param chunks table[]
+  ---@return table[]
+  local function close_line(chunks)
+    local w = 0
+    for _, c in ipairs(chunks) do w = w + vim.fn.strdisplaywidth(c[1]) end
+    local pad = math.max(0, (width - 1) - w)
+    if pad > 0 then chunks[#chunks + 1] = { string.rep(" ", pad) } end
+    chunks[#chunks + 1] = { "│", border_hl }
+    return chunks
+  end
+
+  -- Same nerd glyph as the file-panel badge — single-width, so the right
+  -- rail stays exact regardless of emoji-font quirks.
+  local icon = require("diffview.config").get_config().comments.icon
+  local title = (" %s %s%s "):format(icon, thread.id, outdated and " (outdated)" or "")
+  if vim.fn.strdisplaywidth(title) > width - 3 then
+    title = split_word(title, width - 3)[1]
+  end
+  local fill = math.max(0, width - 3 - vim.fn.strdisplaywidth(title))
   lines[#lines + 1] = {
     { "┌─", border_hl },
     { title, outdated and "DiffviewCommentOutdated" or "DiffviewCommentTitle" },
-    { string.rep("─", fill), border_hl },
+    { string.rep("─", fill) .. "┐", border_hl },
   }
 
   for ci, comment in ipairs(thread.comments) do
     if ci > 1 then
-      lines[#lines + 1] = { { "│", border_hl }, { " " .. string.rep("·", inner), border_hl } }
+      lines[#lines + 1] = close_line({
+        { "│ ", border_hl },
+        { string.rep("·", width - 4), border_hl },
+      })
     end
 
-    lines[#lines + 1] = {
+    lines[#lines + 1] = close_line({
       { "│ ", border_hl },
       { ("%s %s"):format(SIGN_OPEN, comment.author), author_hl(comment.author) },
       { ("  %s"):format(short_ts(comment.ts)), "DiffviewCommentDim" },
-    }
+    })
 
     for _, raw in ipairs(vim.split(comment.body or "", "\n", { plain = true })) do
       for _, chunk in ipairs(wrap(raw, inner)) do
-        lines[#lines + 1] = { { "│ ", border_hl }, { chunk, body_hl } }
+        lines[#lines + 1] = close_line({ { "│ ", border_hl }, { chunk, body_hl } })
       end
     end
 
     if comment.suggestion and comment.suggestion.text then
-      lines[#lines + 1] = {
+      lines[#lines + 1] = close_line({
         { "│ ", border_hl },
         { "▷ suggestion", "DiffviewCommentSuggestion" },
         { ("  (lines %d–%d)"):format(
           comment.suggestion.replace_lines and comment.suggestion.replace_lines[1] or 0,
           comment.suggestion.replace_lines and comment.suggestion.replace_lines[2] or 0
         ), "DiffviewCommentDim" },
-      }
+      })
       for _, raw in ipairs(vim.split(comment.suggestion.text, "\n", { plain = true })) do
         for _, chunk in ipairs(wrap(raw, inner - 2)) do
-          lines[#lines + 1] = { { "│ + ", border_hl }, { chunk, "DiffviewCommentSuggestion" } }
+          lines[#lines + 1] = close_line({ { "│ + ", border_hl }, { chunk, "DiffviewCommentSuggestion" } })
         end
       end
     end
   end
 
-  -- Interaction hint on the bottom border (default maps): longest variant
-  -- that fits, else the plain border.
+  -- Interaction hint, right-aligned on the bottom border (default maps):
+  -- longest variant that fits, else the plain closed border.
   local bottom
   for _, hint in ipairs({
     " <cr> reply · <leader>gce edit · <leader>gcr resolve · <leader>gcD clear ",
@@ -161,14 +183,14 @@ local function build_box(thread, width, outdated)
     local fill = width - 2 - vim.fn.strdisplaywidth(hint)
     if fill >= 1 then
       bottom = {
-        { "└─", border_hl },
+        { "└" .. string.rep("─", fill), border_hl },
         { hint, "DiffviewCommentDim" },
-        { string.rep("─", fill), border_hl },
+        { "┘", border_hl },
       }
       break
     end
   end
-  lines[#lines + 1] = bottom or { { "└" .. string.rep("─", math.max(0, width - 1)), border_hl } }
+  lines[#lines + 1] = bottom or { { "└" .. string.rep("─", math.max(0, width - 2)) .. "┘", border_hl } }
   return lines
 end
 

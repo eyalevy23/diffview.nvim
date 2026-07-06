@@ -117,8 +117,8 @@ end
 
 -- Key order for pretty printing: humans and the AI both read this file —
 -- stable, readable output matters. Keep the order and format in sync with
--- the encoder in .claude/skills/diff-review/scripts/review_write.py so the
--- two writers don't churn each other's formatting.
+-- the encoder in skills/review/scripts/review_write.py so the two
+-- writers don't churn each other's formatting.
 local KEY_ORDER = {
   version = 1, review = 2, threads = 3,
   id = 10, anchor = 11, status = 12, created_at = 13, updated_at = 14,
@@ -313,7 +313,7 @@ end
 --#region locking + atomic write
 
 ---Keep the lockfile protocol in sync with the AI-side writer:
----.claude/skills/diff-review/scripts/review_write.py (same lockfile name,
+---skills/review/scripts/review_write.py (same lockfile name,
 ---retry count/interval, and stale-steal threshold).
 ---@param path string
 ---@return boolean acquired
