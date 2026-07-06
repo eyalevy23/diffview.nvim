@@ -42,7 +42,6 @@ M.defaults = {
   diff_binaries = false,
   enhanced_diff_hl = false,
   git_cmd = { "git" },
-  hg_cmd = { "hg" },
   use_icons = true,
   show_help_hints = true,
   watch_index = true,
@@ -95,11 +94,6 @@ M.defaults = {
         multi_file = {
           diff_merges = "first-parent",
         },
-      },
-      ---@type ConfigLogOptions
-      hg = {
-        single_file = {},
-        multi_file = {},
       },
     },
     win_config = {
@@ -297,20 +291,7 @@ M._config = M.defaults
 ---@field after string
 ---@field before string
 
----@class HgLogOptions
----@field follow string
----@field limit integer
----@field user string
----@field no_merges boolean
----@field rev string
----@field keyword string
----@field branch string
----@field bookmark string
----@field include string
----@field exclude string
----@field path_args string[]
-
----@alias LogOptions GitLogOptions|HgLogOptions
+---@alias LogOptions GitLogOptions
 
 M.log_option_defaults = {
   ---@type GitLogOptions
@@ -338,16 +319,6 @@ M.log_option_defaults = {
     S = nil,
     path_args = {},
   },
-  ---@type HgLogOptions
-  hg = {
-    limit = 256,
-    user = nil,
-    no_merges = false,
-    rev = nil,
-    keyword = nil,
-    include = nil,
-    exclude = nil,
-  },
 }
 
 ---@return DiffviewConfig
@@ -360,9 +331,9 @@ function M.get_config()
 end
 
 ---@param single_file boolean
----@param t GitLogOptions|HgLogOptions
----@param vcs "git"|"hg"
----@return GitLogOptions|HgLogOptions
+---@param t GitLogOptions
+---@param vcs "git"
+---@return GitLogOptions
 function M.get_log_options(single_file, t, vcs)
   local log_options
 
@@ -616,7 +587,7 @@ function M.setup(user_config)
   end
 
   for _, name in ipairs({ "single_file", "multi_file" }) do
-    for _, vcs in ipairs({ "git", "hg" }) do
+    for _, vcs in ipairs({ "git" }) do
       local t = M._config.file_history_panel.log_options[vcs]
       t[name] = vim.tbl_extend(
         "force",
