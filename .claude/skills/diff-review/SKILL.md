@@ -16,9 +16,9 @@ moment you write it — your comments appear in the editor live.
 REVIEW_FILE="$(git rev-parse --git-dir)/diffview-review.json"
 ```
 
-If it doesn't exist, treat it as `{"version": 1, "review": {}, "threads": []}`.
+Read it directly (`cat`, `jq`). If it doesn't exist, there are no threads yet.
 
-## Schema (version 1)
+## Schema (version 1) — read reference
 
 ```jsonc
 {
@@ -29,7 +29,7 @@ If it doesn't exist, treat it as `{"version": 1, "review": {}, "threads": []}`.
   },
   "threads": [
     {
-      "id": "t-3fa2c1",                    // unique; you mint your own for new threads
+      "id": "t-3fa2c1",                    // minted by the write helper
       "anchor": {
         "path": "src/foo.ts",              // repo-relative
         "side": "b",                        // "b" = new/right side, "a" = old/deleted lines
@@ -56,34 +56,75 @@ If it doesn't exist, treat it as `{"version": 1, "review": {}, "threads": []}`.
 }
 ```
 
-## Write rules (non-negotiable)
+## Writing — ONLY through the helper
 
-1. **Delta-only, merge-on-write.** Read the current file, add/modify only what
-   is yours, keep everything else byte-identical. NEVER regenerate the file
-   from your memory of it, and NEVER edit or delete a comment whose `author`
-   is not `"claude"`.
-2. **Atomic write.** Write to a temp file in the same directory, then
-   `mv` it over `$REVIEW_FILE`. Never write the target in place.
-3. **Fresh ids.** New threads: `t-` + 6 random hex chars; new comments `c-` +
-   6 hex. Set `author` to `"claude"` and `ts` to ISO-8601 UTC.
-4. **Anchors must carry the snippet.** `snippet` is the exact current text of
-   the anchored line — Neovim uses it to keep your comment attached when the
-   file changes. Include `ctx_before`/`ctx_after` when the lines exist.
-5. **Self-check after writing.** Re-read the file, confirm it parses as JSON
-   and your new ids are present. If not, fix it before reporting done.
+NEVER write `$REVIEW_FILE` yourself: no temp+`mv`, no in-place edits, no
+`jq`/`sed` into the file. Neovim writes under a lock; the bundled helper
+takes the SAME lock, re-reads the file fresh, merges your ops, and writes
+atomically. A hand-rolled write races the human and silently loses their
+comments.
+
+The helper is `scripts/review_write.py`, next to this SKILL.md:
+
+```bash
+python3 "<this-skill's-directory>/scripts/review_write.py" "$REVIEW_FILE" <<'EOF'
+{"ops": [
+  {"op": "set_summary", "summary": "Reviewed the working tree: 2 findings, none blocking."}
+]}
+EOF
+```
+
+Build your ops FIRST, then run the helper — it holds the lock only for the
+instant of the write.
+
+- **Exit 0**: the write landed. stdout is JSON listing the ids minted for
+  your new threads/comments — use those ids in follow-up ops.
+- **Nonzero exit**: NOTHING was written. stderr says why; fix the ops and
+  retry. Never work around a rejection by writing the file directly.
+
+The helper enforces the protocol mechanically: it mints every id, forces
+`author: "claude"`, refuses to touch comments you don't own, and refuses
+`set_status` to anything but `"applied"` (resolving is the human's call).
+
+### Ops
+
+| op | fields | effect |
+|----|--------|--------|
+| `add_thread` | `anchor`, `body`, `suggestion?` | new open thread + its first comment |
+| `add_comment` | `thread_id`, `body`, `suggestion?` | append your reply to a thread |
+| `edit_comment` | `comment_id`, `body` | amend one of YOUR OWN comments |
+| `set_status` | `thread_id`, `status` (only `"applied"`) | mark a thread after you changed the code |
+| `set_summary` | `summary` | overall verdict of the review pass |
+
+Anchor fields for `add_thread`: `path`, `side`, `rev`, `line`, `end_line?`,
+`snippet` (EXACT current text of the anchored line — REQUIRED; Neovim uses it
+to keep the comment attached when the file changes), `ctx_before?`/`ctx_after?`
+(include when the lines exist).
+
+Example — reply with a concrete suggestion, and mark another thread applied:
+
+```json
+{"ops": [
+  {"op": "add_comment", "thread_id": "t-3fa2c1",
+   "body": "Good catch — suggestion below.",
+   "suggestion": {"replace_lines": [42, 43],
+                  "text": "const x = await load(id)\nif (!x) return"}},
+  {"op": "set_status", "thread_id": "t-9b01d2", "status": "applied"}
+]}
+```
 
 ## Your work queue
 
 An **open thread whose last comment is NOT authored by "claude"** is addressed
 to you. For each one:
 
-- Reply in that thread (append to `comments`).
+- Reply in that thread (`add_comment`).
 - If the fix is concrete, attach a `suggestion` block — the human applies it
   with one keypress. Prefer suggestions over prose for mechanical changes.
 - If you were asked to change code and you did it directly (edited the files),
-  say so in the reply and set the thread's `status` to `"applied"`.
-- Do NOT flip threads to `"resolved"` yourself — resolution is the human's
-  call. (`"applied"` after you actually changed code is fine.)
+  say so in the reply and `set_status` the thread to `"applied"`.
+- Do NOT try to resolve threads — resolution is the human's call, and the
+  helper will reject it. (`"applied"` after you actually changed code is fine.)
 - Never re-litigate threads that are `resolved` — the human decided.
 
 ## Reviewing a diff yourself
@@ -93,10 +134,11 @@ When asked to review:
 1. Read the actual changes: `git diff` (working tree), `git diff --cached`
    (index), or the range the human names. Read enough surrounding file
    context to judge correctness — the diff alone is not enough.
-2. Leave one thread per distinct finding, anchored to the most relevant line
-   (side `"b"`, rev `"WORKING"` for working-tree reviews; side `"a"` only for
-   comments on deleted lines). Include `snippet` from the file's CURRENT text.
-3. Write your overall verdict to `review.summary` (one paragraph: what you
+2. Leave one `add_thread` per distinct finding, anchored to the most relevant
+   line (side `"b"`, rev `"WORKING"` for working-tree reviews; side `"a"` only
+   for comments on deleted lines). Include `snippet` from the file's CURRENT
+   text.
+3. Write your overall verdict via `set_summary` (one paragraph: what you
    reviewed, what's blocking, what's nice-to-have).
 4. Quality over quantity: real defects, risky edges, and concrete
    simplifications. Skip style nits unless asked.

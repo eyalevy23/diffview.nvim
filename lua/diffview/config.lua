@@ -51,6 +51,10 @@ M.defaults = {
     fold_open = "",
     done = "✓",
   },
+  comments = {
+    icon = "", -- file-panel badge glyph for open threads (nf-fa-comment_o, U+F0E5)
+    -- author: comment author name; defaults to $USER (see comments/init.lua).
+  },
   view = {
     default = {
       layout = "diff1_unified",
@@ -123,11 +127,16 @@ M.defaults = {
       { "n", "T",           actions.jump_to_edit,                   { desc = "Open the real file for editing at the mapped diff line" } },
       { "n", "]c",          actions.next_hunk,                      { desc = "Jump to the next hunk" } },
       { "n", "[c",          actions.prev_hunk,                      { desc = "Jump to the previous hunk" } },
-      { "n", "<cr>",        actions.comment_open,                   { desc = "Comment: reply to the thread here, or start a new one" } },
-      { "n", "]t",          actions.next_comment,                   { desc = "Jump to the next comment thread" } },
-      { "n", "[t",          actions.prev_comment,                   { desc = "Jump to the previous comment thread" } },
-      { "n", "<leader>cd",  actions.comment_resolve,                { desc = "Comment: toggle resolved on the thread here" } },
-      { "n", "<leader>cs",  actions.comment_apply,                  { desc = "Comment: apply the suggestion of the thread here" } },
+      { "n", "<cr>",         actions.comment_open,                  { desc = "Comment: reply here / new thread" } },
+      { "n", "]t",           actions.next_comment,                  { desc = "Next comment thread" } },
+      { "n", "[t",           actions.prev_comment,                  { desc = "Prev comment thread" } },
+      { "n", "<leader>gcc",  actions.comment_open,                  { desc = "Comment: reply / new" } },
+      { "n", "<leader>gce",  actions.comment_edit,                  { desc = "Comment: edit your comment" } },
+      { "n", "<leader>gcr",  actions.comment_resolve,               { desc = "Comment: resolve toggle" } },
+      { "n", "<leader>gca",  actions.comment_apply,                 { desc = "Comment: apply suggestion" } },
+      { "n", "<leader>gcn",  actions.next_comment,                  { desc = "Comment: next thread" } },
+      { "n", "<leader>gcp",  actions.prev_comment,                  { desc = "Comment: prev thread" } },
+      { "n", "<leader>gcD",  actions.comment_clear_all,             { desc = "Comment: delete ALL (confirm)" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",     actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
       { "n", "<leader>e",   actions.focus_files,                    { desc = "Bring focus to the file panel" } },

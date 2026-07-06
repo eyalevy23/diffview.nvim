@@ -39,9 +39,11 @@ M.docs = {}
 ---fs watchers per store path.
 M.watchers = {}
 
----Thread ids observed as outdated during placement (stamped on next write).
----@type table<string, boolean>
-M.outdated_seen = {}
+---Observation state per thread id from the latest placement pass:
+---"outdated" | "ok". Absent means the thread was never placed (its file/rev
+---isn't open) — its outdated_since must be left untouched on write.
+---@type table<string, "outdated"|"ok">
+M.observed = {}
 
 --#region doc + context plumbing
 
@@ -56,13 +58,14 @@ function M.get_doc(path)
   return M.docs[path]
 end
 
----All open threads for a repo-relative file path (panel badge).
+---All open threads for a repo-relative file path (panel badge). Loads the
+---review file on demand so the badge is right on the panel's FIRST paint,
+---before any diff buffer has attached.
 ---@param adapter VCSAdapter
 ---@param file_path string
 ---@return integer open_count
 function M.count_for(adapter, file_path)
-  local doc = M.docs[store.path_for(adapter)]
-  if not doc then return 0 end
+  local doc = M.get_doc(store.path_for(adapter))
   local n = 0
   for _, t in ipairs(doc.threads) do
     if t.anchor.path == file_path and t.status == "open" then n = n + 1 end
@@ -78,9 +81,10 @@ end
 function M.update(store_path, apply)
   local doc, err = store.update(store_path, function(doc)
     for _, t in ipairs(doc.threads) do
-      if M.outdated_seen[t.id] and not t.outdated_since then
+      local seen = M.observed[t.id]
+      if seen == "outdated" and not t.outdated_since then
         t.outdated_since = store.now()
-      elseif not M.outdated_seen[t.id] then
+      elseif seen == "ok" then
         t.outdated_since = nil
       end
     end
@@ -131,7 +135,7 @@ local function place_threads(bufnr)
         local res = anchor_mod.resolve(a, lines_for(a.side))
         local row = unified.row_for(bufnr, a.side, res.line)
 
-        M.outdated_seen[thread.id] = res.outdated or nil
+        M.observed[thread.id] = res.outdated and "outdated" or "ok"
 
         if row then
           placed[#placed + 1] = { thread = thread, row = row, outdated = res.outdated }
@@ -212,11 +216,13 @@ local function ensure_watcher(ctx)
 
       M.refresh_all(path)
 
-      local open = 0
-      for _, t in ipairs(doc.threads) do
-        if t.status == "open" then open = open + 1 end
+      if lib.get_current_view() then
+        local open = 0
+        for _, t in ipairs(doc.threads) do
+          if t.status == "open" then open = open + 1 end
+        end
+        api.nvim_echo({ { ("[diffview] review updated externally (%d open thread(s))"):format(open) } }, false, {})
       end
-      api.nvim_echo({ { ("[diffview] review updated externally (%d open thread(s))"):format(open) } }, false, {})
     end, 200)
   end)
 
@@ -224,6 +230,36 @@ local function ensure_watcher(ctx)
     M.watchers[path] = handle
   else
     handle:close()
+  end
+end
+
+---Tear down state for stores that no longer back any live buffer: close the
+---fs-watcher and drop the cached doc + observation state. Called on
+---view_closed, after the view has destroyed its diff buffers.
+function M.detach_orphans()
+  local live = {}
+  for bufnr, ctx in pairs(M.buf_ctx) do
+    if api.nvim_buf_is_valid(bufnr) then
+      live[ctx.store_path] = true
+    else
+      M.buf_ctx[bufnr] = nil
+    end
+  end
+
+  for path, handle in pairs(M.watchers) do
+    if not live[path] then
+      handle:stop()
+      if not handle:is_closing() then handle:close() end
+      M.watchers[path] = nil
+
+      local doc = M.docs[path]
+      if doc then
+        for _, t in ipairs(doc.threads) do
+          M.observed[t.id] = nil
+        end
+        M.docs[path] = nil
+      end
+    end
   end
 end
 
@@ -316,11 +352,15 @@ local function author_name()
 end
 
 ---Open a floating markdown input. `<C-s>` submits, `q`/<Esc> cancels.
----@param opts { title: string, on_submit: fun(text: string) }
+---@param opts { title: string, initial?: string, on_submit: fun(text: string) }
 local function open_input(opts)
   local buf = api.nvim_create_buf(false, true)
   vim.bo[buf].filetype = "markdown"
   vim.bo[buf].bufhidden = "wipe"
+
+  if opts.initial and opts.initial ~= "" then
+    api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(opts.initial, "\n", { plain = true }))
+  end
 
   local width = math.min(80, math.max(50, math.floor(vim.o.columns * 0.6)))
   local win = api.nvim_open_win(buf, true, {
@@ -352,7 +392,12 @@ local function open_input(opts)
   vim.keymap.set("n", "q", close, { buffer = buf, nowait = true })
   vim.keymap.set("n", "<Esc>", close, { buffer = buf, nowait = true })
 
-  vim.cmd("startinsert")
+  if opts.initial and opts.initial ~= "" then
+    api.nvim_win_set_cursor(win, { api.nvim_buf_line_count(buf), 0 })
+    vim.cmd("startinsert!")
+  else
+    vim.cmd("startinsert")
+  end
 end
 
 ---Find the thread rendered at (or covering) a buffer row.
@@ -378,7 +423,7 @@ function M.comment_open()
     open_input({
       title = ("Reply · %s"):format(existing.id),
       on_submit = function(text)
-        M.update(ctx.store_path, function(doc)
+        local doc = M.update(ctx.store_path, function(doc)
           for _, t in ipairs(doc.threads) do
             if t.id == existing.id then
               t.comments[#t.comments + 1] = {
@@ -392,6 +437,10 @@ function M.comment_open()
             end
           end
         end)
+        if not doc then
+          vim.fn.setreg('"', text)
+          utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
+        end
       end,
     })
     return
@@ -411,7 +460,7 @@ function M.comment_open()
   open_input({
     title = ("New comment · %s:%d"):format(ctx.path, src_lnum),
     on_submit = function(text)
-      M.update(ctx.store_path, function(doc)
+      local doc = M.update(ctx.store_path, function(doc)
         doc.threads[#doc.threads + 1] = {
           id = store.gen_id("t"),
           anchor = anchor_mod.make(ctx.path, side, rev, src_lnum, src_lnum, src_lines),
@@ -423,6 +472,57 @@ function M.comment_open()
           },
         }
       end)
+      if not doc then
+        vim.fn.setreg('"', text)
+        utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
+      end
+    end,
+  })
+end
+
+---Edit your own latest comment on the thread at the cursor line.
+function M.comment_edit()
+  local bufnr = api.nvim_get_current_buf()
+  local ctx = ctx_for(bufnr)
+  if not ctx then return end
+
+  local row = api.nvim_win_get_cursor(0)[1]
+  local existing = thread_at(bufnr, row)
+  if not existing then return end
+
+  local me = author_name()
+  local target
+  for i = #existing.comments, 1, -1 do
+    if existing.comments[i].author == me then
+      target = existing.comments[i]
+      break
+    end
+  end
+  if not target then
+    utils.warn("[diffview] No comment of yours to edit here.")
+    return
+  end
+
+  open_input({
+    title = ("Edit · %s"):format(target.id),
+    initial = target.body,
+    on_submit = function(text)
+      local doc = M.update(ctx.store_path, function(doc)
+        for _, t in ipairs(doc.threads) do
+          if t.id == existing.id then
+            for _, c in ipairs(t.comments) do
+              if c.id == target.id and c.author == me then
+                c.body = text
+                t.updated_at = store.now()
+              end
+            end
+          end
+        end
+      end)
+      if not doc then
+        vim.fn.setreg('"', text)
+        utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
+      end
     end,
   })
 end
@@ -514,6 +614,32 @@ function M.comment_apply()
   api.nvim_exec_autocmds("BufWritePost", { buffer = buf })
 end
 
+---Delete every comment thread in the repo's review store, after confirming.
+function M.comment_clear_all()
+  local view = lib.get_current_view()
+  local adapter = view and view.adapter
+  if not adapter then
+    utils.err("[diffview] Open a diffview first.")
+    return
+  end
+
+  local path = store.path_for(adapter)
+  local n = #M.get_doc(path).threads
+  if n == 0 then
+    utils.info("[diffview] No comments to clear.")
+    return
+  end
+
+  local choice = vim.fn.confirm(
+    ("Delete ALL %d comment thread(s) in this repo? This cannot be undone."):format(n),
+    "&Delete\n&Cancel", 2)
+  if choice ~= 1 then return end
+
+  if M.update(path, function(doc) doc.threads = {} end) then
+    utils.info(("[diffview] Cleared %d comment thread(s)."):format(n))
+  end
+end
+
 ---@param dir integer 1|-1
 function M.comment_nav(dir)
   local bufnr = api.nvim_get_current_buf()
@@ -594,6 +720,10 @@ function M.init()
     if ctx and ctx.layout_name == "diff1_unified" then
       M.attach(bufnr)
     end
+  end)
+
+  DiffviewGlobal.emitter:on("view_closed", function(_)
+    M.detach_orphans()
   end)
 
   -- Unified re-renders replace the buffer content, which moves/clears our

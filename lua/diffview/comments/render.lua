@@ -24,7 +24,34 @@ local function author_hl(author)
   return "DiffviewCommentAuthorHuman"
 end
 
----Wrap `text` to `width` display cells. Returns at least one line.
+---Hard-split a single over-width word into display-width sized chunks
+---(binary search per chunk — handles wide chars).
+---@param word string
+---@param width integer
+---@return string[]
+local function split_word(word, width)
+  local out = {}
+  local total = vim.fn.strchars(word)
+  local pos = 0
+  while pos < total do
+    local lo, hi = 1, total - pos
+    while lo < hi do
+      local mid = math.ceil((lo + hi) / 2)
+      if vim.fn.strdisplaywidth(vim.fn.strcharpart(word, pos, mid)) > width then
+        hi = mid - 1
+      else
+        lo = mid
+      end
+    end
+    out[#out + 1] = vim.fn.strcharpart(word, pos, lo)
+    pos = pos + lo
+  end
+  return out
+end
+
+---Wrap `text` to `width` display cells, breaking on spaces — a word is only
+---hard-split when it is itself wider than `width`. Leading indent sticks to
+---the first line (suggestion text is code). Returns at least one line.
 ---@param text string
 ---@param width integer
 ---@return string[]
@@ -33,21 +60,34 @@ local function wrap(text, width)
   if vim.fn.strdisplaywidth(text) <= width then return { text } end
 
   local out = {}
-  local total = vim.fn.strchars(text)
-  local pos = 0
-  while pos < total do
-    local lo, hi = 1, total - pos
-    while lo < hi do
-      local mid = math.ceil((lo + hi) / 2)
-      if vim.fn.strdisplaywidth(vim.fn.strcharpart(text, pos, mid)) > width then
-        hi = mid - 1
+  local line = nil ---@type string?
+
+  for ws, word in text:gmatch("(%s*)(%S+)") do
+    -- The first word keeps the leading indent; later words keep their
+    -- separating whitespace when they stay on the same line.
+    local joined = (line == nil) and (ws .. word) or (line .. ws .. word)
+
+    if vim.fn.strdisplaywidth(joined) <= width then
+      line = joined
+    else
+      if line ~= nil then
+        out[#out + 1] = line
+        line = nil
+      end
+      if vim.fn.strdisplaywidth(word) <= width then
+        line = word
       else
-        lo = mid
+        local pieces = split_word(word, width)
+        for i = 1, #pieces - 1 do
+          out[#out + 1] = pieces[i]
+        end
+        line = pieces[#pieces]
       end
     end
-    out[#out + 1] = vim.fn.strcharpart(text, pos, lo)
-    pos = pos + lo
   end
+
+  if line ~= nil and line ~= "" then out[#out + 1] = line end
+  if #out == 0 then out[1] = text end
   return out
 end
 
@@ -111,7 +151,24 @@ local function build_box(thread, width, outdated)
     end
   end
 
-  lines[#lines + 1] = { { "└" .. string.rep("─", math.max(0, width - 1)), border_hl } }
+  -- Interaction hint on the bottom border (default maps): longest variant
+  -- that fits, else the plain border.
+  local bottom
+  for _, hint in ipairs({
+    " <cr> reply · <leader>gce edit · <leader>gcr resolve · <leader>gcD clear ",
+    " <cr> reply · <leader>gce edit · <leader>gcr resolve ",
+  }) do
+    local fill = width - 2 - vim.fn.strdisplaywidth(hint)
+    if fill >= 1 then
+      bottom = {
+        { "└─", border_hl },
+        { hint, "DiffviewCommentDim" },
+        { string.rep("─", fill), border_hl },
+      }
+      break
+    end
+  end
+  lines[#lines + 1] = bottom or { { "└" .. string.rep("─", math.max(0, width - 1)), border_hl } }
   return lines
 end
 

@@ -256,6 +256,11 @@ function M.comment_open()
   require("diffview.comments").comment_open()
 end
 
+---Edit your own latest comment on the thread at the cursor line.
+function M.comment_edit()
+  require("diffview.comments").comment_edit()
+end
+
 ---Toggle resolved on the comment thread at the cursor line.
 function M.comment_resolve()
   require("diffview.comments").comment_resolve()
@@ -264,6 +269,11 @@ end
 ---Apply the latest AI suggestion of the thread at the cursor to the file.
 function M.comment_apply()
   require("diffview.comments").comment_apply()
+end
+
+---Delete ALL comment threads in the repo (asks for confirmation).
+function M.comment_clear_all()
+  require("diffview.comments").comment_clear_all()
 end
 
 ---Jump to the next comment thread.

@@ -4,39 +4,50 @@ local utils = require("diffview.utils")
 
 local pl = utils.path
 
+---Right-truncate `text` to `budget` display cells, ellipsis at the end.
+---@param text string
+---@param budget integer
+---@return string
+local function truncate_text(text, budget)
+  if vim.fn.strdisplaywidth(text) <= budget then return text end
+  if budget < 1 then return "" end
+  local lo, hi = 0, vim.fn.strchars(text)
+  while lo < hi do
+    local mid = math.ceil((lo + hi) / 2)
+    if vim.fn.strdisplaywidth(vim.fn.strcharpart(text, 0, mid)) > budget - 1 then
+      hi = mid - 1
+    else
+      lo = mid
+    end
+  end
+  return vim.fn.strcharpart(text, 0, lo) .. "…"
+end
+
+---Render one file row as [ fixed left ][ flex name… ][ pinned right ]: the
+---conflict marker, comment badge and stats are flush to the panel's right
+---edge and always render in full — a long name truncates, never them.
 ---@param comp  RenderComponent
 ---@param show_path boolean
 ---@param depth integer|nil
-local function render_file(comp, show_path, depth)
+---@param width integer Panel text width.
+local function render_file(comp, show_path, depth, width)
   ---@type FileEntry
   local file = comp.context
+  local conf = config.get_config()
 
-  comp:add_text(file.status .. " ", hl.get_git_hl(file.status))
-
+  -- Fixed left region: status, tree indent, icon.
+  local left = { { file.status .. " ", hl.get_git_hl(file.status) } }
   if depth then
-    comp:add_text(string.rep(" ", depth + 1))
+    left[#left + 1] = { string.rep(" ", depth + 1) }
   end
-
   local icon, icon_hl = hl.get_file_icon(file.basename, file.extension)
-  comp:add_text(icon, icon_hl)
-  comp:add_text(file.basename, file.active and "DiffviewFilePanelSelected" or "DiffviewFilePanelFileName")
+  left[#left + 1] = { icon, icon_hl }
 
-  if file.stats then
-    if file.stats.additions then
-      comp:add_text(" " .. file.stats.additions, "DiffviewFilePanelInsertions")
-      comp:add_text(", ")
-      comp:add_text(tostring(file.stats.deletions), "DiffviewFilePanelDeletions")
-    elseif file.stats.conflicts then
-      local has_conflicts = file.stats.conflicts > 0
-      comp:add_text(
-        " " .. (has_conflicts and file.stats.conflicts or config.get_config().signs.done),
-        has_conflicts and "DiffviewFilePanelConflicts" or "DiffviewFilePanelInsertions"
-      )
-    end
-  end
+  -- Pinned right region: conflict marker, comment badge, stats.
+  local right = {}
 
   if file.kind == "conflicting" and not (file.stats and file.stats.conflicts) then
-    comp:add_text(" !", "DiffviewFilePanelConflicts")
+    right[#right + 1] = { " !", "DiffviewFilePanelConflicts" }
   end
 
   do
@@ -46,22 +57,70 @@ local function render_file(comp, show_path, depth)
     if comments then
       local n = comments.count_for(file.adapter, file.path)
       if n > 0 then
-        comp:add_text((" 🗨%d"):format(n), "DiffviewCommentCount")
+        right[#right + 1] = { (" %s%d"):format(conf.comments.icon, n), "DiffviewCommentCount" }
       end
     end
   end
 
-  if show_path then
-    comp:add_text(" " .. file.parent_path, "DiffviewFilePanelPath")
+  if file.stats then
+    if file.stats.additions then
+      right[#right + 1] = { " " .. file.stats.additions, "DiffviewFilePanelInsertions" }
+      right[#right + 1] = { ", " }
+      right[#right + 1] = { tostring(file.stats.deletions), "DiffviewFilePanelDeletions" }
+    elseif file.stats.conflicts then
+      local has_conflicts = file.stats.conflicts > 0
+      right[#right + 1] = {
+        " " .. (has_conflicts and file.stats.conflicts or conf.signs.done),
+        has_conflicts and "DiffviewFilePanelConflicts" or "DiffviewFilePanelInsertions",
+      }
+    end
   end
+
+  local left_w, right_w = 0, 0
+  for _, c in ipairs(left) do left_w = left_w + vim.fn.strdisplaywidth(c[1]) end
+  for _, c in ipairs(right) do right_w = right_w + vim.fn.strdisplaywidth(c[1]) end
+
+  -- Flex middle: basename (+ parent path in list mode). Keep at least a
+  -- sliver of the name even when the row overflows.
+  local flex = {
+    { file.basename, file.active and "DiffviewFilePanelSelected" or "DiffviewFilePanelFileName" },
+  }
+  if show_path then
+    flex[#flex + 1] = { " " .. file.parent_path, "DiffviewFilePanelPath" }
+  end
+  local budget = math.max(width - left_w - right_w, 3)
+
+  for _, c in ipairs(left) do comp:add_text(c[1], c[2]) end
+
+  local used = 0
+  for _, c in ipairs(flex) do
+    local w = vim.fn.strdisplaywidth(c[1])
+    if used + w <= budget then
+      comp:add_text(c[1], c[2])
+      used = used + w
+    else
+      local text = truncate_text(c[1], budget - used)
+      if text ~= "" then
+        comp:add_text(text, c[2])
+        used = used + vim.fn.strdisplaywidth(text)
+      end
+      break
+    end
+  end
+
+  local pad = width - left_w - used - right_w
+  if pad > 0 then comp:add_text(string.rep(" ", pad)) end
+
+  for _, c in ipairs(right) do comp:add_text(c[1], c[2]) end
 
   comp:ln()
 end
 
 ---@param comp RenderComponent
-local function render_file_list(comp)
+---@param width integer
+local function render_file_list(comp, width)
   for _, file_comp in ipairs(comp.components) do
-    render_file(file_comp, true)
+    render_file(file_comp, true, nil, width)
   end
 end
 
@@ -80,11 +139,12 @@ end
 
 ---@param depth integer
 ---@param comp RenderComponent
-local function render_file_tree_recurse(depth, comp)
+---@param width integer
+local function render_file_tree_recurse(depth, comp, width)
   local conf = config.get_config()
 
   if comp.name == "file" then
-    render_file(comp, false, depth)
+    render_file(comp, false, depth, width)
     return
   end
 
@@ -121,15 +181,16 @@ local function render_file_tree_recurse(depth, comp)
 
   if not ctx.collapsed then
     for _, item in ipairs(items.components) do
-      render_file_tree_recurse(depth + 1, item)
+      render_file_tree_recurse(depth + 1, item, width)
     end
   end
 end
 
 ---@param comp RenderComponent
-local function render_file_tree(comp)
+---@param width integer
+local function render_file_tree(comp, width)
   for _, c in ipairs(comp.components) do
-    render_file_tree_recurse(0, c)
+    render_file_tree_recurse(0, c, width)
   end
 end
 
@@ -160,11 +221,12 @@ end
 
 ---@param listing_style "list"|"tree"
 ---@param comp RenderComponent
-local function render_files(listing_style, comp)
+---@param width integer
+local function render_files(listing_style, comp, width)
   if listing_style == "list" then
-    return render_file_list(comp)
+    return render_file_list(comp, width)
   end
-  render_file_tree(comp)
+  render_file_tree(comp, width)
 end
 
 ---@param panel FilePanel
@@ -176,6 +238,15 @@ return function(panel)
   panel.render_data:clear()
   local conf = config.get_config()
   local width = panel:infer_width()
+
+  -- infer_width() is the full window width, gutter included; the pinned
+  -- right region must fit inside the visible TEXT columns (the panel has
+  -- signcolumn="yes"), so subtract the decoration columns.
+  local text_width = width - 3
+  if panel.winid and vim.api.nvim_win_is_valid(panel.winid) then
+    text_width = vim.api.nvim_win_get_width(panel.winid)
+      - vim.fn.getwininfo(panel.winid)[1].textoff - 1
+  end
 
   local comp = panel.components.path.comp
 
@@ -196,7 +267,7 @@ return function(panel)
     comp:add_text("(" .. #panel.files.conflicting .. ")", "DiffviewFilePanelCounter")
     comp:ln()
 
-    render_files(panel.listing_style, panel.components.conflicting.files.comp)
+    render_files(panel.listing_style, panel.components.conflicting.files.comp, text_width)
     panel.components.conflicting.margin.comp:add_line()
   end
 
@@ -211,7 +282,7 @@ return function(panel)
     render_stats_summary(comp, panel.files.working)
     comp:ln()
 
-    render_files(panel.listing_style, panel.components.working.files.comp)
+    render_files(panel.listing_style, panel.components.working.files.comp, text_width)
     panel.components.working.margin.comp:add_line()
   end
 
@@ -222,7 +293,7 @@ return function(panel)
     render_stats_summary(comp, panel.files.staged)
     comp:ln()
 
-    render_files(panel.listing_style, panel.components.staged.files.comp)
+    render_files(panel.listing_style, panel.components.staged.files.comp, text_width)
     panel.components.staged.margin.comp:add_line()
   end
 

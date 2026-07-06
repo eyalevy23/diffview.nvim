@@ -80,11 +80,26 @@ function M.parse_ts(ts)
   if type(ts) ~= "string" then return nil end
   local y, mo, d, h, mi, s = ts:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
   if not y then return nil end
-  return os.time({
+  local epoch = os.time({
     year = tonumber(y), month = tonumber(mo), day = tonumber(d),
     hour = tonumber(h), min = tonumber(mi), sec = tonumber(s),
   })
+  if not epoch then return nil end
+  -- The fields are UTC, but os.time() read them as local time: shift by the
+  -- local↔UTC offset, computed at the parsed moment so sessions spanning a
+  -- DST change stay correct (≤1h residual right at a boundary — immaterial
+  -- against day-scale TTLs). os.date("!*t") pins isdst=false, which would
+  -- bias zones currently on summer time by an hour — drop it so mktime
+  -- decides.
+  local utc = os.date("!*t", epoch) --[[@as osdateparam]]
+  utc.isdst = nil
+  local off = os.difftime(os.time(os.date("*t", epoch) --[[@as osdateparam]]), os.time(utc))
+  return epoch + off
 end
+
+-- Seed once per process: LuaJIT does not auto-seed, so without this two
+-- editors launched close together would draw identical random sequences.
+math.randomseed(uv.hrtime() + uv.os_getpid())
 
 local id_counter = 0
 
@@ -92,15 +107,18 @@ local id_counter = 0
 ---@return string
 function M.gen_id(prefix)
   id_counter = id_counter + 1
-  return ("%s-%x%x%x"):format(prefix, os.time() % 0xffffff, math.random(0xffff), id_counter)
+  return ("%s-%x%x%x%x"):format(
+    prefix, os.time() % 0xffffff, uv.os_getpid() % 0xffff, math.random(0xffff), id_counter)
 end
 
 --#endregion
 
 --#region JSON
 
--- Key order for pretty printing: humans and the AI both read this file, and
--- the AI edits it with string operations — stable, readable output matters.
+-- Key order for pretty printing: humans and the AI both read this file —
+-- stable, readable output matters. Keep the order and format in sync with
+-- the encoder in .claude/skills/diff-review/scripts/review_write.py so the
+-- two writers don't churn each other's formatting.
 local KEY_ORDER = {
   version = 1, review = 2, threads = 3,
   id = 10, anchor = 11, status = 12, created_at = 13, updated_at = 14,
@@ -294,6 +312,9 @@ end
 
 --#region locking + atomic write
 
+---Keep the lockfile protocol in sync with the AI-side writer:
+---.claude/skills/diff-review/scripts/review_write.py (same lockfile name,
+---retry count/interval, and stale-steal threshold).
 ---@param path string
 ---@return boolean acquired
 local function lock(path)
@@ -319,7 +340,9 @@ local function unlock(path)
   pcall(uv.fs_unlink, path .. ".lock")
 end
 
----Atomically write `content` to `path` (temp file + rename).
+---Atomically write `content` to `path` (temp file + rename). The temp file
+---never replaces the target unless every byte was written and fsynced — a
+---short write (e.g. disk full) must not clobber a good store.
 ---@param path string
 ---@param content string
 ---@return boolean ok
@@ -327,10 +350,22 @@ local function write_atomic(path, content)
   local tmp = ("%s.tmp.%d"):format(path, uv.os_getpid())
   local fd = uv.fs_open(tmp, "w", 420)
   if not fd then return false end
-  uv.fs_write(fd, content, 0)
-  uv.fs_fsync(fd)
+
+  local written = 0
+  while written < #content do
+    local n = uv.fs_write(fd, content:sub(written + 1), written)
+    if not n or n <= 0 then break end
+    written = written + n
+  end
+
+  local ok = written == #content and uv.fs_fsync(fd) ~= nil
   uv.fs_close(fd)
-  return uv.fs_rename(tmp, path) ~= nil
+
+  if not ok or uv.fs_rename(tmp, path) == nil then
+    pcall(uv.fs_unlink, tmp)
+    return false
+  end
+  return true
 end
 
 ---The single write entry point: lock, read fresh, apply the caller's delta,
