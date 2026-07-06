@@ -66,21 +66,6 @@ function StandardView:init_layout()
 end
 
 function StandardView:post_layout()
-  if config.get_config().enhanced_diff_hl then
-    self.winopts.diff2.a.winhl = {
-      "DiffAdd:DiffviewDiffAddAsDelete",
-      "DiffDelete:DiffviewDiffDeleteDim",
-      "DiffChange:DiffviewDiffChange",
-      "DiffText:DiffviewDiffText",
-    }
-    self.winopts.diff2.b.winhl = {
-      "DiffDelete:DiffviewDiffDeleteDim",
-      "DiffAdd:DiffviewDiffAdd",
-      "DiffChange:DiffviewDiffChange",
-      "DiffText:DiffviewDiffText",
-    }
-  end
-
   DiffviewGlobal.emitter:emit("view_post_layout", self)
 end
 

@@ -3,11 +3,6 @@ local lazy = require("diffview.lazy")
 local Layout = require("diffview.scene.layout").Layout
 local oop = require("diffview.oop")
 
-local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
-local Diff4 = lazy.access("diffview.scene.layouts.diff_4", "Diff4") ---@type Diff4|LazyModule
-local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModule
-local Rev = lazy.access("diffview.vcs.rev", "Rev") ---@type Rev|LazyModule
-local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
 local Window = lazy.access("diffview.scene.window", "Window") ---@type Window|LazyModule
 
 local api = vim.api
@@ -87,73 +82,6 @@ end)
 
 function Diff1:get_main_win()
   return self.b
-end
-
----@param layout Diff3
----@return Diff3
-function Diff1:to_diff3(layout)
-  assert(layout:instanceof(Diff3.__get()))
-  local main = self:get_main_win().file
-
-  return layout({
-    a = File({
-      adapter = main.adapter,
-      path = main.path,
-      kind = main.kind,
-      commit = main.commit,
-      get_data = main.get_data,
-      rev = Rev(RevType.STAGE, 2),
-      nulled = false, -- FIXME
-    }),
-    b = self.b.file,
-    c = File({
-      adapter = main.adapter,
-      path = main.path,
-      kind = main.kind,
-      commit = main.commit,
-      get_data = main.get_data,
-      rev = Rev(RevType.STAGE, 3),
-      nulled = false, -- FIXME
-    }),
-  })
-end
-
----@param layout Diff4
----@return Diff4
-function Diff1:to_diff4(layout)
-  assert(layout:instanceof(Diff4.__get()))
-  local main = self:get_main_win().file
-
-  return layout({
-    a = File({
-      adapter = main.adapter,
-      path = main.path,
-      kind = main.kind,
-      commit = main.commit,
-      get_data = main.get_data,
-      rev = Rev(RevType.STAGE, 2),
-      nulled = false, -- FIXME
-    }),
-    b = self.b.file,
-    c = File({
-      adapter = main.adapter,
-      path = main.path,
-      kind = main.kind,
-      commit = main.commit,
-      get_data = main.get_data,
-      rev = Rev(RevType.STAGE, 3),
-      nulled = false, -- FIXME
-    }),
-    d = File({
-      adapter = main.adapter,
-      path = main.path,
-      kind = main.kind,
-      commit = main.commit,
-      get_data = main.get_data,
-      rev = Rev(RevType.STAGE, 1),
-      nulled = false, -- FIXME
-    })
-  })
 end
 
 ---FIXME

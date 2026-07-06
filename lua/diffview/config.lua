@@ -38,7 +38,6 @@ end
 ---@class DiffviewConfig
 M.defaults = {
   diff_binaries = false,
-  enhanced_diff_hl = false,
   git_cmd = { "git" },
   use_icons = true,
   show_help_hints = true,
