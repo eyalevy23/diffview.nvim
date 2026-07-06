@@ -150,6 +150,18 @@ function M.refresh_buf(bufnr)
   render.render(bufnr, place_threads(bufnr))
 end
 
+---Re-read every known review file from disk and repaint. Exposed for the
+---AI-side "nudge" (`nvim --remote-expr`); the fs-watcher covers the normal
+---path.
+function M.reload()
+  for path in pairs(M.docs) do
+    local doc, warn = store.load(path)
+    M.docs[path] = doc
+    if warn then utils.warn("[diffview] " .. warn) end
+  end
+  M.refresh_all()
+end
+
 ---Refresh all buffers backed by a store path (and the file panel badge).
 ---@param store_path? string
 function M.refresh_all(store_path)
