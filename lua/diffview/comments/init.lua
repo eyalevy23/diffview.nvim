@@ -672,6 +672,14 @@ end
 
 local function cmd_review(cmd_opts)
   local sub = cmd_opts.fargs[1] or "list"
+
+  -- Global subcommands — no diffview required.
+  if sub == "setup" then
+    return require("diffview.comments.install").setup()
+  elseif sub == "uninstall" then
+    return require("diffview.comments.install").uninstall()
+  end
+
   local view = lib.get_current_view()
   local adapter = view and view.adapter
   if not adapter then
@@ -740,8 +748,26 @@ function M.init()
 
   api.nvim_create_user_command("DiffviewReview", cmd_review, {
     nargs = "?",
-    complete = function() return { "list", "clear", "resolve-all" } end,
+    complete = function() return { "list", "clear", "resolve-all", "setup", "uninstall" } end,
   })
+
+  -- One-line, once-per-session nudge when the AI side isn't wired: opt-in
+  -- setup only — never a modal, never a config write.
+  if vim.system and vim.fn.executable("claude") == 1 then
+    vim.system(
+      { "claude", "mcp", "get", require("diffview.comments.install").MCP_NAME },
+      {},
+      function(res)
+        if res.code ~= 0 then
+          vim.schedule(function()
+            api.nvim_echo({ {
+              "[diffview] AI review loop not set up — run :DiffviewReview setup once to enable it",
+              "Comment",
+            } }, false, {})
+          end)
+        end
+      end)
+  end
 end
 
 --#endregion

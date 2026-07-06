@@ -57,47 +57,38 @@ replies in-thread, attaches suggestion blocks you can apply with one key, and
 marks threads `applied` after changing code. Resolving a thread is always the
 human's call.
 
-### Install the AI side (global — one install, all your projects)
+### Setting up the AI side
 
-Both routes install the skill **globally**: after one install, every project
-you open with your agent can read and write review comments. There is nothing
-to configure per repo — each repo automatically gets its own review file
-inside its `.git` directory.
+Everything ships **inside this Neovim plugin** — the MCP server, the trigger
+skill, and a CLI fallback (all python3 stdlib, no build step, nothing on
+PATH). Installing the plugin with your plugin manager is the only install.
+Then wire the Claude Code side once, globally for all your projects:
 
-**Option 1 — one line, works for many agents** (Claude Code, Cursor, Codex,
-and more, via the [skills CLI](https://github.com/vercel-labs/skills)):
+```vim
+:DiffviewReview setup
+```
+
+This is explicit and transparent: it prints and runs one
+`claude mcp add --scope user …` command pointing at the plugin's bundled
+server, and links the trigger skill into `~/.claude/skills`. Re-run it any
+time (idempotent — also the fix if your plugin manager moves the plugin
+directory). Verify with:
+
+```vim
+:checkhealth diffview
+```
+
+Requirements: the `claude` CLI and `python3` on PATH. Approve the
+`diff-nvim` MCP tools once when Claude first uses them; after that the loop
+runs without approval prompts. To undo: `:DiffviewReview uninstall` — or, if
+you already deleted the plugin, `claude mcp remove --scope user diff-nvim`.
+
+**Other agents** (Cursor, Codex, and friends — no MCP): install the skill +
+CLI copy with the [skills CLI](https://github.com/vercel-labs/skills):
 
 ```sh
 npx skills add eyalevy23/diffview.nvim
 ```
-
-This installs the skill as `diff-nvim-review`. Re-run the same command any
-time to update it.
-
-**Option 2 — Claude Code plugin** (managed install, updates automatically on
-new commits):
-
-```
-/plugin marketplace add eyalevy23/diffview.nvim
-/plugin install diff-nvim
-```
-
-Invoke it directly as `/diff-nvim:review`.
-
-Either way you rarely need the command itself — just ask Claude to
-"review my diff" or "address my review comments" and the skill triggers
-automatically. Requires `python3` on PATH (stdlib only): the skill writes the
-review file through a bundled lock-safe helper.
-
-> **Pairing note:** these are two independent installs. This repo as a Neovim
-> plugin is the *human* side (renders and edits threads in the diff);
-> `diff-nvim` as a Claude Code plugin is the *AI* side (lets Claude read and
-> write the same threads). Each works without the other, but they're designed
-> as a pair.
-
-After the one-time trust step (the workspace-trust dialog for a cloned repo,
-or the plugin-install confirmation), the review loop runs **without
-per-command approval prompts** — the skill carries its own tool permission.
 
 ### Comment keymaps (in the diff)
 
@@ -112,18 +103,13 @@ per-command approval prompts** — the skill carries its own tool permission.
 | `<leader>gcn` / `<leader>gcp` | Next / previous thread |
 | `<leader>gcD` | Delete ALL threads (asks first) |
 
-### For contributors: loading the skill from a clone
+### For contributors
 
-- Working **inside this repo**: the skill auto-loads via project scope (the
-  `.claude/skills/diff-nvim-review` symlink → `skills/review`) — just run
-  Claude Code here and `/diff-nvim-review` is available.
-- To use it globally from your clone **without** the marketplace: run
-  `ln -s "$(pwd)/skills/review" ~/.claude/skills/diff-nvim-review` — Claude
-  Code follows the symlink and `${CLAUDE_SKILL_DIR}` resolves the bundled
-  helper, so it works in every project. Once you switch to the published
-  plugin, delete that symlink and use `/plugin install diff-nvim` instead —
-  one source of truth.
-- Either way, `python3` on PATH is required (same as the plugin install).
+Run `:DiffviewReview setup` from your dev copy of the plugin — it registers
+that copy's server and links that copy's skill globally, so your edits to
+`skills/review/` are live everywhere immediately (skill body changes are
+even picked up without re-running setup, since the link points at your
+working tree).
 
 ## Merge Tool
 

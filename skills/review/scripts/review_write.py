@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
-"""AI-side writer for diffview.nvim's shared review file.
+"""CLI for diff.nvim's review loop — a thin wrapper over review_core.py.
 
-The ONLY sanctioned way for the AI to write <git-dir>/diffview-review.json.
-Neovim writes the same file under a lock (lua/diffview/comments/store.lua);
-this helper takes the SAME lock, re-reads the file fresh, merges the caller's
-ops, and writes atomically — so neither writer can lose the other's work.
-
-Keep in sync with store.lua (both sides carry a matching comment):
-  * lockfile protocol: <file>.lock, O_CREAT|O_EXCL, 5 tries x 40ms, steal
-    locks staler than 10s
-  * atomic write: <file>.tmp.<pid>, write-all + fsync, rename; never replace
-    the target on a short write
-  * pretty-printer: 2-space indent, KEY_ORDER-sorted keys
-
-Deliberately NOT mirrored from store.lua: GC and last-written hashing. This
-is an external writer — Neovim's watcher must see the write and reload; GC
-runs on the Neovim side.
+This is the PORTABLE FALLBACK writer/reader for agents without MCP support
+(Claude Code sessions normally use the bundled MCP server, review_mcp.py,
+which imports the same core). All protocol logic — locking, atomic writes,
+the canonical encoder, id-minting, invariant enforcement — lives in
+review_core.py, the single source of truth shared with the server and kept
+in sync with the Neovim writer (lua/diffview/comments/store.lua).
 
 Usage:
     review_write.py OPSFILE                    # ops JSON from a file
     review_write.py - < ops.json               # ops JSON on stdin
     review_write.py OPSFILE --review-file P    # explicit review-file override
+    review_write.py --queue                    # print open threads awaiting claude
+    review_write.py --list                     # print the full review document
 
 The review file is derived automatically: `git rev-parse --git-dir` from the
 current directory -> <git-dir>/diffview-review.json. Use --review-file PATH
@@ -33,39 +26,15 @@ The ops payload is {"ops": [op, ...]} or a bare [op, ...]; each op is one of:
     {"op": "set_status", "thread_id": "t-..", "status": "applied"}
     {"op": "set_summary", "summary": "..."}
 
-Enforced invariants (violation = nonzero exit, NOTHING written):
-    * every id is minted here — callers never supply ids
-    * author is always "claude"; comments by anyone else are untouchable
-    * status may only be set to "applied" — resolving is the human's call
-
 Exit codes: 0 ok; 1 usage/ops error; 2 invariant violation; 3 unreadable
 review file (left untouched); 4 lock timeout; 5 write failure.
 On success stdout is JSON: {"ok": true, "minted": [...]}.
 """
 
 import json
-import os
-import secrets
-import subprocess
 import sys
-import time
 
-VERSION = 1
-LOCK_TRIES = 5
-LOCK_SLEEP_S = 0.04
-LOCK_STALE_S = 10
-
-# Mirror of store.lua's KEY_ORDER — keep in sync.
-KEY_ORDER = {
-    "version": 1, "review": 2, "threads": 3,
-    "id": 10, "anchor": 11, "status": 12, "created_at": 13, "updated_at": 14,
-    "outdated_since": 15, "resolved_reason": 16, "comments": 17,
-    "path": 20, "side": 21, "rev": 22, "line": 23, "end_line": 24,
-    "snippet": 25, "ctx_before": 26, "ctx_after": 27,
-    "author": 30, "ts": 31, "body": 32, "suggestion": 33,
-    "replace_lines": 40, "text": 41,
-    "summary": 50,
-}
+import review_core as core
 
 
 def die(code, msg):
@@ -73,300 +42,8 @@ def die(code, msg):
     sys.exit(code)
 
 
-def now_iso():
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-# -- encoder (mirror of store.lua M.encode) ---------------------------------
-
-def encode(value, indent=0):
-    pad = "  " * indent
-    pad_in = "  " * (indent + 1)
-
-    if isinstance(value, list):
-        if not value:
-            return "[]"
-        parts = [pad_in + encode(v, indent + 1) for v in value]
-        return "[\n" + ",\n".join(parts) + "\n" + pad + "]"
-
-    if isinstance(value, dict):
-        if not value:
-            return "{}"
-        keys = sorted(value.keys(), key=lambda k: (KEY_ORDER.get(k, 99), str(k)))
-        parts = [
-            "%s%s: %s" % (pad_in, json.dumps(str(k), ensure_ascii=False),
-                          encode(value[k], indent + 1))
-            for k in keys
-        ]
-        return "{\n" + ",\n".join(parts) + "\n" + pad + "}"
-
-    # Lua prints integral doubles without a decimal point.
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    return json.dumps(value, ensure_ascii=False)
-
-
-# -- lock + atomic write (mirror of store.lua lock()/write_atomic()) --------
-
-def acquire_lock(path):
-    lockfile = path + ".lock"
-    for _ in range(LOCK_TRIES):
-        try:
-            fd = os.open(lockfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.close(fd)
-            return lockfile
-        except FileExistsError:
-            pass
-        try:
-            if time.time() - os.stat(lockfile).st_mtime > LOCK_STALE_S:
-                os.unlink(lockfile)  # steal a crashed writer's lock
-                continue
-        except OSError:
-            continue  # lock vanished — retry immediately
-        time.sleep(LOCK_SLEEP_S)
-    return None
-
-
-def write_atomic(path, content):
-    tmp = "%s.tmp.%d" % (path, os.getpid())
-    data = content.encode("utf-8")
-    fd = None
-    try:
-        fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o644)
-        off = 0
-        while off < len(data):
-            n = os.write(fd, data[off:])
-            if n <= 0:
-                raise OSError("short write")
-            off += n
-        os.fsync(fd)
-        os.close(fd)
-        fd = None
-        os.replace(tmp, path)
-        return True
-    except OSError:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        return False
-
-
-# -- document ---------------------------------------------------------------
-
-def load_doc(path):
-    try:
-        with open(path, "rb") as f:
-            raw = f.read()
-    except FileNotFoundError:
-        raw = b""
-    except OSError as e:
-        die(3, "cannot read %s: %s" % (path, e))
-
-    if not raw.strip():
-        return {"version": VERSION, "review": {}, "threads": []}
-
-    try:
-        doc = json.loads(raw)
-    except ValueError as e:
-        die(3, "review file is not valid JSON (%s) — refusing to touch it; "
-               "let Neovim repair it" % e)
-
-    # Structural sanity: refuse rather than repair (repair is Neovim's job).
-    if not isinstance(doc, dict) or not isinstance(doc.get("version"), int):
-        die(3, "review file has no valid version field — refusing to touch it")
-    if not isinstance(doc.get("review"), dict):
-        doc["review"] = {}
-    if not isinstance(doc.get("threads"), list):
-        doc["threads"] = []
-    return doc
-
-
-def mint_id(prefix, used):
-    while True:
-        new = "%s-%s" % (prefix, secrets.token_hex(3))
-        if new not in used:
-            used.add(new)
-            return new
-
-
-# -- op validation ----------------------------------------------------------
-
-def as_str(value, field, opi, allow_empty=False):
-    if not isinstance(value, str) or (not allow_empty and value.strip() == ""):
-        die(1, "op %d: %s must be a non-empty string" % (opi, field))
-    return value
-
-
-def as_int(value, field, opi, minimum=1):
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
-        die(1, "op %d: %s must be an integer >= %d" % (opi, field, minimum))
-    return value
-
-
-def check_suggestion(sug, opi):
-    if sug is None:
-        return None
-    if not isinstance(sug, dict):
-        die(1, "op %d: suggestion must be an object" % opi)
-    rl = sug.get("replace_lines")
-    if (not isinstance(rl, list) or len(rl) != 2
-            or not all(isinstance(n, int) and not isinstance(n, bool) for n in rl)
-            or rl[0] < 1 or rl[1] < rl[0]):
-        die(1, "op %d: suggestion.replace_lines must be [first, last], "
-               "1-indexed, first <= last" % opi)
-    text = sug.get("text")
-    if not isinstance(text, str):
-        die(1, "op %d: suggestion.text must be a string" % opi)
-    return {"replace_lines": [rl[0], rl[1]], "text": text}
-
-
-def check_anchor(anchor, opi):
-    if not isinstance(anchor, dict):
-        die(1, "op %d: add_thread needs an anchor object" % opi)
-    line = as_int(anchor.get("line"), "anchor.line", opi)
-    side = anchor.get("side", "b")
-    if side not in ("a", "b"):
-        die(1, 'op %d: anchor.side must be "a" or "b"' % opi)
-    snippet = anchor.get("snippet")
-    if not isinstance(snippet, str):
-        die(1, "op %d: anchor.snippet is required — the EXACT text of the "
-               "anchored line (may be empty for a blank line)" % opi)
-
-    out = {
-        "path": as_str(anchor.get("path"), "anchor.path", opi),
-        "side": side,
-        "rev": as_str(anchor.get("rev", "WORKING"), "anchor.rev", opi),
-        "line": line,
-        "end_line": as_int(anchor.get("end_line", line), "anchor.end_line",
-                           opi, minimum=line),
-        "snippet": snippet,
-    }
-    for key in ("ctx_before", "ctx_after"):
-        val = anchor.get(key)
-        if val is not None:
-            if not isinstance(val, str):
-                die(1, "op %d: anchor.%s must be a string" % (opi, key))
-            out[key] = val
-    return out
-
-
-def find_thread(doc, tid, opi):
-    for t in doc["threads"]:
-        if isinstance(t, dict) and t.get("id") == tid:
-            return t
-    die(1, "op %d: thread %s not found" % (opi, tid))
-
-
-# -- op application (all-or-nothing: any die() happens before the write) ----
-
-def apply_ops(doc, ops):
-    used = set()
-    for t in doc["threads"]:
-        if isinstance(t, dict):
-            used.add(t.get("id"))
-            for c in t.get("comments") or []:
-                if isinstance(c, dict):
-                    used.add(c.get("id"))
-
-    minted = []
-    ts = now_iso()
-
-    for i, op in enumerate(ops):
-        if not isinstance(op, dict):
-            die(1, "op %d: each op must be an object" % i)
-        kind = op.get("op")
-
-        if kind == "add_thread":
-            anchor = check_anchor(op.get("anchor"), i)
-            body = as_str(op.get("body"), "body", i)
-            tid = mint_id("t", used)
-            cid = mint_id("c", used)
-            comment = {"id": cid, "author": "claude", "ts": ts, "body": body}
-            sug = check_suggestion(op.get("suggestion"), i)
-            if sug:
-                comment["suggestion"] = sug
-            doc["threads"].append({
-                "id": tid,
-                "anchor": anchor,
-                "status": "open",
-                "created_at": ts,
-                "updated_at": ts,
-                "comments": [comment],
-            })
-            minted.append({"op": i, "thread_id": tid, "comment_id": cid})
-
-        elif kind == "add_comment":
-            thread = find_thread(
-                doc, as_str(op.get("thread_id"), "thread_id", i), i)
-            body = as_str(op.get("body"), "body", i)
-            cid = mint_id("c", used)
-            comment = {"id": cid, "author": "claude", "ts": ts, "body": body}
-            sug = check_suggestion(op.get("suggestion"), i)
-            if sug:
-                comment["suggestion"] = sug
-            thread.setdefault("comments", []).append(comment)
-            thread["updated_at"] = ts
-            minted.append({"op": i, "comment_id": cid})
-
-        elif kind == "edit_comment":
-            cid = as_str(op.get("comment_id"), "comment_id", i)
-            target, parent = None, None
-            for t in doc["threads"]:
-                for c in (t.get("comments") or []) if isinstance(t, dict) else []:
-                    if isinstance(c, dict) and c.get("id") == cid:
-                        target, parent = c, t
-            if target is None:
-                die(1, "op %d: comment %s not found" % (i, cid))
-            if target.get("author") != "claude":
-                die(2, "op %d: refusing to edit comment %s — its author is "
-                       "%r, not claude. Others' comments are untouchable."
-                       % (i, cid, target.get("author")))
-            target["body"] = as_str(op.get("body"), "body", i)
-            parent["updated_at"] = ts
-
-        elif kind == "set_status":
-            status = op.get("status")
-            if status != "applied":
-                die(2, 'op %d: set_status only accepts "applied" — '
-                       "resolving (or reopening) is the human's call" % i)
-            thread = find_thread(
-                doc, as_str(op.get("thread_id"), "thread_id", i), i)
-            thread["status"] = "applied"
-            thread["updated_at"] = ts
-
-        elif kind == "set_summary":
-            doc["review"]["summary"] = as_str(
-                op.get("summary"), "summary", i)
-
-        else:
-            die(1, "op %d: unknown op %r" % (i, kind))
-
-    return minted
-
-
-# -- main ---------------------------------------------------------------------
-
-def derive_review_file():
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True, text=True, check=True)
-    except FileNotFoundError:
-        die(1, "git not found on PATH")
-    except subprocess.CalledProcessError:
-        die(1, "not in a git repository — run from inside the repo, "
-               "or pass --review-file PATH")
-    return os.path.join(proc.stdout.strip(), "diffview-review.json")
-
-
 def parse_args(argv):
-    ops_file, review_path = None, None
+    ops_file, review_path, mode = None, None, "write"
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -377,6 +54,10 @@ def parse_args(argv):
             review_path = argv[i]
         elif arg.startswith("--review-file="):
             review_path = arg.split("=", 1)[1]
+        elif arg in ("--list", "--queue"):
+            if mode != "write":
+                die(1, "--list and --queue are mutually exclusive")
+            mode = arg[2:]
         elif arg in ("-h", "--help"):
             print(__doc__)
             sys.exit(0)
@@ -385,52 +66,42 @@ def parse_args(argv):
         else:
             die(1, "unexpected argument: %s" % arg)
         i += 1
-    return ops_file, review_path
+    if mode != "write" and ops_file is not None:
+        die(1, "--%s is read-only — don't pass an ops file with it" % mode)
+    return ops_file, review_path, mode
 
 
 def main():
-    ops_file, review_path = parse_args(sys.argv[1:])
-    path = review_path if review_path is not None else derive_review_file()
-
-    if ops_file is None or ops_file == "-":
-        try:
-            payload = json.load(sys.stdin)
-        except ValueError as e:
-            die(1, "stdin is not valid JSON: %s" % e)
-    else:
-        try:
-            with open(ops_file, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except OSError as e:
-            die(1, "cannot read ops file %s: %s" % (ops_file, e))
-        except ValueError as e:
-            die(1, "ops file %s is not valid JSON: %s" % (ops_file, e))
-
-    ops = payload.get("ops") if isinstance(payload, dict) else payload
-    if not isinstance(ops, list) or not ops:
-        die(1, 'no ops: stdin must be {"ops": [...]} or a bare [...] '
-               "with at least one op")
-
-    lockfile = acquire_lock(path)
-    if lockfile is None:
-        die(4, "could not lock the review file (another writer is stuck? "
-               "locks staler than %ds are stolen automatically)" % LOCK_STALE_S)
+    ops_file, review_path, mode = parse_args(sys.argv[1:])
 
     try:
-        doc = load_doc(path)
-        minted = apply_ops(doc, ops)
-        doc["version"] = VERSION
-        doc["review"]["updated_at"] = now_iso()
+        path = review_path if review_path is not None else core.derive_review_file()
 
-        if not write_atomic(path, encode(doc) + "\n"):
-            die(5, "atomic write failed — the review file was left untouched")
+        if mode == "queue":
+            print(json.dumps(core.read_queue(path), indent=2, ensure_ascii=False))
+            return
+        if mode == "list":
+            print(json.dumps(core.read_list(path), indent=2, ensure_ascii=False))
+            return
 
-        print(json.dumps({"ok": True, "minted": minted}))
-    finally:
-        try:
-            os.unlink(lockfile)
-        except OSError:
-            pass
+        if ops_file is None or ops_file == "-":
+            try:
+                payload = json.load(sys.stdin)
+            except ValueError as e:
+                die(1, "stdin is not valid JSON: %s" % e)
+        else:
+            try:
+                with open(ops_file, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            except OSError as e:
+                die(1, "cannot read ops file %s: %s" % (ops_file, e))
+            except ValueError as e:
+                die(1, "ops file %s is not valid JSON: %s" % (ops_file, e))
+
+        ops = payload.get("ops") if isinstance(payload, dict) else payload
+        print(json.dumps(core.write_ops(path, ops)))
+    except core.ReviewError as e:
+        die(e.code, e.message)
 
 
 if __name__ == "__main__":
