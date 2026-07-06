@@ -379,6 +379,14 @@ function M.render(bufnr, file_a, file_b)
   -- the decoration provider when they scroll into view.
   M._ts_precompute(st, st.visible_ranges)
 
+  -- Content replacement moved/cleared any foreign extmarks (e.g. comment
+  -- threads) — let interested layers repaint against the new line_map.
+  api.nvim_exec_autocmds("User", {
+    pattern = "DiffviewUnifiedRendered",
+    modeline = false,
+    data = { buf = bufnr },
+  })
+
   return st, true
 end
 

@@ -1,0 +1,387 @@
+-- The review store: one JSON file per repo (inside the git dir) holding all
+-- comment threads. Both Neovim and the AI read/write it; there is no daemon.
+--
+-- Write discipline (both writers follow it):
+--   * merge-on-write: read the file fresh, apply your delta, write — never
+--     serialize stale in-memory state over the file.
+--   * atomic replace: write a temp file, then rename over the target.
+--   * self-event suppression: remember the hash of what you wrote so the
+--     fs-watcher can ignore your own writes.
+--
+-- The file is capped: GC runs on every write, dropping old resolved/outdated
+-- threads first. Open threads are never dropped silently.
+
+local lazy = require("diffview.lazy")
+
+local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
+
+local uv = vim.uv or vim.loop
+local M = {}
+
+M.VERSION = 1
+M.FILENAME = "diffview-review.json"
+
+M.MAX_THREADS = 200
+M.MAX_BYTES = 512 * 1024
+M.TTL_RESOLVED = 7 * 24 * 3600 -- seconds a resolved/applied thread survives
+M.TTL_OUTDATED = 2 * 24 * 3600 -- seconds an outdated thread survives
+
+---Content hash of our last write, for self-event suppression.
+---@type table<string, string>
+M.last_written = {}
+
+---@class ReviewSuggestion
+---@field replace_lines { [1]: integer, [2]: integer } 1-indexed inclusive range in the anchored file
+---@field text string Replacement text (newline separated)
+
+---@class ReviewComment
+---@field id string
+---@field author string e.g. "eyal" | "claude"
+---@field ts string ISO-8601 UTC
+---@field body string
+---@field suggestion? ReviewSuggestion
+
+---@class ReviewAnchor
+---@field path string Repo-relative file path
+---@field side "a"|"b"
+---@field rev string "WORKING" | ":0" | full SHA
+---@field line integer
+---@field end_line integer
+---@field snippet string The anchored line's text at comment time
+---@field ctx_before? string
+---@field ctx_after? string
+
+---@class ReviewThread
+---@field id string
+---@field anchor ReviewAnchor
+---@field status "open"|"resolved"|"applied"
+---@field created_at string
+---@field updated_at string
+---@field outdated_since? string
+---@field resolved_reason? string
+---@field comments ReviewComment[]
+
+---@class ReviewDoc
+---@field version integer
+---@field review { summary?: string, updated_at?: string }
+---@field threads ReviewThread[]
+
+--#region time / id helpers
+
+---@return string
+function M.now()
+  return os.date("!%Y-%m-%dT%H:%M:%SZ") --[[@as string ]]
+end
+
+---Parse an ISO-8601 UTC timestamp to a unix epoch. Returns nil on garbage.
+---@param ts? string
+---@return integer?
+function M.parse_ts(ts)
+  if type(ts) ~= "string" then return nil end
+  local y, mo, d, h, mi, s = ts:match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
+  if not y then return nil end
+  return os.time({
+    year = tonumber(y), month = tonumber(mo), day = tonumber(d),
+    hour = tonumber(h), min = tonumber(mi), sec = tonumber(s),
+  })
+end
+
+local id_counter = 0
+
+---@param prefix string
+---@return string
+function M.gen_id(prefix)
+  id_counter = id_counter + 1
+  return ("%s-%x%x%x"):format(prefix, os.time() % 0xffffff, math.random(0xffff), id_counter)
+end
+
+--#endregion
+
+--#region JSON
+
+-- Key order for pretty printing: humans and the AI both read this file, and
+-- the AI edits it with string operations — stable, readable output matters.
+local KEY_ORDER = {
+  version = 1, review = 2, threads = 3,
+  id = 10, anchor = 11, status = 12, created_at = 13, updated_at = 14,
+  outdated_since = 15, resolved_reason = 16, comments = 17,
+  path = 20, side = 21, rev = 22, line = 23, end_line = 24,
+  snippet = 25, ctx_before = 26, ctx_after = 27,
+  author = 30, ts = 31, body = 32, suggestion = 33,
+  replace_lines = 40, text = 41,
+  summary = 50,
+}
+
+local function sorted_keys(t)
+  local keys = vim.tbl_keys(t)
+  table.sort(keys, function(x, y)
+    local ox, oy = KEY_ORDER[x] or 99, KEY_ORDER[y] or 99
+    if ox ~= oy then return ox < oy end
+    return tostring(x) < tostring(y)
+  end)
+  return keys
+end
+
+---Pretty-print a plain lua table as JSON (2-space indent, stable key order).
+---@param value any
+---@param indent? integer
+---@return string
+function M.encode(value, indent)
+  indent = indent or 0
+  local pad = string.rep("  ", indent)
+  local pad_in = string.rep("  ", indent + 1)
+
+  if type(value) == "table" then
+    if vim.islist(value) then
+      if #value == 0 then return "[]" end
+      local parts = {}
+      for _, v in ipairs(value) do
+        parts[#parts + 1] = pad_in .. M.encode(v, indent + 1)
+      end
+      return "[\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "]"
+    else
+      if next(value) == nil then return "{}" end
+      local parts = {}
+      for _, k in ipairs(sorted_keys(value)) do
+        parts[#parts + 1] = ("%s%s: %s"):format(pad_in, vim.json.encode(tostring(k)), M.encode(value[k], indent + 1))
+      end
+      return "{\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "}"
+    end
+  end
+
+  return vim.json.encode(value)
+end
+
+--#endregion
+
+--#region document access
+
+---@param adapter VCSAdapter
+---@return string
+function M.path_for(adapter)
+  return utils.path:join(adapter.ctx.dir, M.FILENAME)
+end
+
+---@return ReviewDoc
+function M.empty_doc()
+  return { version = M.VERSION, review = {}, threads = {} }
+end
+
+---Validate + normalize a decoded document. Invalid threads are dropped.
+---@param doc any
+---@return ReviewDoc? doc
+---@return integer dropped
+local function validate(doc)
+  if type(doc) ~= "table" or type(doc.version) ~= "number" then
+    return nil, 0
+  end
+
+  doc.review = type(doc.review) == "table" and doc.review or {}
+  local threads = type(doc.threads) == "table" and doc.threads or {}
+  local valid, dropped = {}, 0
+
+  for _, t in ipairs(threads) do
+    local a = type(t) == "table" and t.anchor or nil
+    if type(t) == "table"
+      and type(t.id) == "string"
+      and type(a) == "table"
+      and type(a.path) == "string"
+      and type(a.line) == "number"
+      and type(t.comments) == "table"
+    then
+      t.status = (t.status == "resolved" or t.status == "applied") and t.status or "open"
+      a.side = (a.side == "a") and "a" or "b"
+      a.end_line = type(a.end_line) == "number" and a.end_line or a.line
+      valid[#valid + 1] = t
+    else
+      dropped = dropped + 1
+    end
+  end
+
+  doc.threads = valid
+  return doc, dropped
+end
+
+---Load the review file. On corruption, the broken file is backed up to
+---`<path>.bak` and an empty doc is returned.
+---@param path string
+---@return ReviewDoc doc
+---@return string? warn
+function M.load(path)
+  local fd = uv.fs_open(path, "r", 438)
+  if not fd then return M.empty_doc(), nil end
+
+  local stat = uv.fs_fstat(fd)
+  local content = stat and uv.fs_read(fd, stat.size, 0) or nil
+  uv.fs_close(fd)
+
+  if not content or content == "" then return M.empty_doc(), nil end
+
+  local ok, decoded = pcall(vim.json.decode, content, { luanil = { object = true, array = true } })
+  local doc, dropped = nil, 0
+  if ok then doc, dropped = validate(decoded) end
+
+  if not doc then
+    pcall(uv.fs_rename, path, path .. ".bak")
+    return M.empty_doc(), ("Corrupt review file backed up to %s.bak"):format(path)
+  end
+
+  if dropped > 0 then
+    return doc, ("Dropped %d invalid thread(s) from the review file"):format(dropped)
+  end
+
+  return doc, nil
+end
+
+---Garbage-collect a document in place. Never drops open threads.
+---@param doc ReviewDoc
+---@param now? integer epoch
+---@return integer removed
+function M.gc(doc, now)
+  now = now or os.time()
+  local kept, removed = {}, 0
+
+  for _, t in ipairs(doc.threads) do
+    local drop = false
+    local age_ref = M.parse_ts(t.updated_at) or M.parse_ts(t.created_at)
+
+    if (t.status == "resolved" or t.status == "applied") and age_ref and now - age_ref > M.TTL_RESOLVED then
+      drop = true
+    elseif t.status == "open" and t.outdated_since then
+      local since = M.parse_ts(t.outdated_since)
+      if since and now - since > M.TTL_OUTDATED then drop = true end
+    end
+
+    if drop then removed = removed + 1 else kept[#kept + 1] = t end
+  end
+  doc.threads = kept
+
+  -- Hard caps: prune resolved/applied oldest-first, then outdated open ones.
+  local function prune_one()
+    local best_i, best_age
+    for i, t in ipairs(doc.threads) do
+      if t.status ~= "open" or t.outdated_since then
+        local age = M.parse_ts(t.updated_at) or M.parse_ts(t.created_at) or 0
+        if not best_age or age < best_age then best_i, best_age = i, age end
+      end
+    end
+    if best_i then
+      table.remove(doc.threads, best_i)
+      removed = removed + 1
+      return true
+    end
+    return false
+  end
+
+  while #doc.threads > M.MAX_THREADS do
+    if not prune_one() then
+      utils.warn("[diffview] Review file over thread cap, but all threads are open — not pruning.")
+      break
+    end
+  end
+
+  while #M.encode(doc) > M.MAX_BYTES do
+    if not prune_one() then
+      utils.warn("[diffview] Review file over size cap, but all threads are open — not pruning.")
+      break
+    end
+  end
+
+  return removed
+end
+
+--#endregion
+
+--#region locking + atomic write
+
+---@param path string
+---@return boolean acquired
+local function lock(path)
+  local lockfile = path .. ".lock"
+  for _ = 1, 5 do
+    local fd = uv.fs_open(lockfile, "wx", 384)
+    if fd then
+      uv.fs_close(fd)
+      return true
+    end
+    -- Steal stale locks (a crashed writer): older than 10s.
+    local stat = uv.fs_stat(lockfile)
+    if stat and os.time() - stat.mtime.sec > 10 then
+      pcall(uv.fs_unlink, lockfile)
+    else
+      uv.sleep(40)
+    end
+  end
+  return false
+end
+
+local function unlock(path)
+  pcall(uv.fs_unlink, path .. ".lock")
+end
+
+---Atomically write `content` to `path` (temp file + rename).
+---@param path string
+---@param content string
+---@return boolean ok
+local function write_atomic(path, content)
+  local tmp = ("%s.tmp.%d"):format(path, uv.os_getpid())
+  local fd = uv.fs_open(tmp, "w", 420)
+  if not fd then return false end
+  uv.fs_write(fd, content, 0)
+  uv.fs_fsync(fd)
+  uv.fs_close(fd)
+  return uv.fs_rename(tmp, path) ~= nil
+end
+
+---The single write entry point: lock, read fresh, apply the caller's delta,
+---GC, write atomically, remember the content hash for self-suppression.
+---@param path string
+---@param apply fun(doc: ReviewDoc) Mutates the freshly loaded doc.
+---@return ReviewDoc? doc The written document (nil on failure).
+---@return string? err
+function M.update(path, apply)
+  if not lock(path) then
+    return nil, "Could not lock the review file (another writer is stuck?)"
+  end
+
+  local ok, result = pcall(function()
+    local doc = M.load(path)
+    apply(doc)
+    doc.version = M.VERSION
+    doc.review.updated_at = M.now()
+    M.gc(doc)
+
+    local content = M.encode(doc) .. "\n"
+    if not write_atomic(path, content) then
+      error("Failed to write the review file: " .. path)
+    end
+
+    M.last_written[path] = vim.fn.sha256(content)
+    return doc
+  end)
+
+  unlock(path)
+
+  if not ok then return nil, tostring(result) end
+  return result, nil
+end
+
+---Check whether the file's current content is our own last write.
+---@param path string
+---@return boolean
+function M.is_own_write(path)
+  local last = M.last_written[path]
+  if not last then return false end
+
+  local fd = uv.fs_open(path, "r", 438)
+  if not fd then return false end
+  local stat = uv.fs_fstat(fd)
+  local content = stat and uv.fs_read(fd, stat.size, 0) or ""
+  uv.fs_close(fd)
+
+  return vim.fn.sha256(content) == last
+end
+
+--#endregion
+
+return M

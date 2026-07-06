@@ -470,6 +470,16 @@ M.hl_links = {
   UnifiedNumNew = "LineNr",
   UnifiedSignAdd = "diffAdded",
   UnifiedSignDel = "diffRemoved",
+  CommentBorder = "FloatBorder",
+  CommentTitle = "Title",
+  CommentBody = "NormalFloat",
+  CommentDim = "Comment",
+  CommentOutdated = "Comment",
+  CommentAuthorHuman = "Identifier",
+  CommentAuthorAI = "Special",
+  CommentSuggestion = "diffAdded",
+  CommentSignApplied = "diffAdded",
+  CommentCount = "DiffviewFilePanelCounter",
 }
 
 function M.update_diff_hl()

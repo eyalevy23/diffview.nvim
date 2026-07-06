@@ -39,6 +39,18 @@ local function render_file(comp, show_path, depth)
     comp:add_text(" !", "DiffviewFilePanelConflicts")
   end
 
+  do
+    -- Open review-comment threads on this file (comments module is loaded
+    -- lazily by the unified layout; don't force it here).
+    local comments = package.loaded["diffview.comments"]
+    if comments then
+      local n = comments.count_for(file.adapter, file.path)
+      if n > 0 then
+        comp:add_text((" 🗨%d"):format(n), "DiffviewCommentCount")
+      end
+    end
+  end
+
   if show_path then
     comp:add_text(" " .. file.parent_path, "DiffviewFilePanelPath")
   end

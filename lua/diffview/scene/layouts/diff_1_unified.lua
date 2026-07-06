@@ -14,6 +14,8 @@ local oop = require("diffview.oop")
 
 local unified = require("diffview.scene.layouts.unified_render")
 
+require("diffview.comments").init()
+
 local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModule
 local debounce = lazy.require("diffview.debounce") ---@module "diffview.debounce"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"

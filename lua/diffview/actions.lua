@@ -251,6 +251,31 @@ function M.prev_hunk()
   unified_hunk_nav(-1)
 end
 
+---Reply to the comment thread on the cursor line, or start a new one.
+function M.comment_open()
+  require("diffview.comments").comment_open()
+end
+
+---Toggle resolved on the comment thread at the cursor line.
+function M.comment_resolve()
+  require("diffview.comments").comment_resolve()
+end
+
+---Apply the latest AI suggestion of the thread at the cursor to the file.
+function M.comment_apply()
+  require("diffview.comments").comment_apply()
+end
+
+---Jump to the next comment thread.
+function M.next_comment()
+  require("diffview.comments").comment_nav(1)
+end
+
+---Jump to the previous comment thread.
+function M.prev_comment()
+  require("diffview.comments").comment_nav(-1)
+end
+
 ---@class diffview.ConflictCount
 ---@field total integer
 ---@field current integer
