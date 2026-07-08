@@ -338,6 +338,56 @@ end
 ---@field keymaps table
 ---@field disable_diagnostics boolean
 
+-- Vim resolves a buffer-local <nowait> exact match instantly only if it was
+-- defined AFTER every longer buffer-local map sharing its prefix. Menu plugins
+-- (which-key, mini.clue) install such nowait prefix triggers when they first
+-- scan a buffer; attaching our maps afterwards would leave those triggers
+-- stale and add a `timeoutlen` hang on their keys. Re-assert (delete +
+-- re-create) every trigger our maps just out-ordered, longest lhs first so
+-- nested triggers end up shortest-newest, preserving their own precedence.
+local function reassert_nowait_prefix_maps(bufnr, keymaps)
+  local function raw(lhs) return api.nvim_replace_termcodes(lhs, true, true, true) end
+  local new_by_mode, own = {}, {}
+  for _, m in ipairs(keymaps) do
+    local modes = type(m[1]) == "table" and m[1] or { m[1] }
+    for _, mode in ipairs(modes) do
+      new_by_mode[mode] = new_by_mode[mode] or {}
+      local lhs = raw(m[2])
+      table.insert(new_by_mode[mode], lhs)
+      own[mode .. "\1" .. lhs] = true
+    end
+  end
+  for mode, new_lhss in pairs(new_by_mode) do
+    local matched = {}
+    for _, km in ipairs(api.nvim_buf_get_keymap(bufnr, mode)) do
+      local lhs = km.lhsraw or raw(km.lhs)
+      if km.nowait == 1 and not own[mode .. "\1" .. lhs] then
+        for _, new_lhs in ipairs(new_lhss) do
+          if #new_lhs > #lhs and new_lhs:sub(1, #lhs) == lhs then
+            table.insert(matched, { km = km, len = #lhs })
+            break
+          end
+        end
+      end
+    end
+    table.sort(matched, function(a, b) return a.len > b.len end)
+    for _, m in ipairs(matched) do
+      local km = m.km
+      pcall(api.nvim_buf_del_keymap, bufnr, mode, km.lhs)
+      pcall(api.nvim_buf_set_keymap, bufnr, mode, km.lhs, km.rhs or "", {
+        callback = km.callback,
+        noremap = km.noremap == 1,
+        silent = km.silent == 1,
+        expr = km.expr == 1,
+        nowait = true,
+        script = km.script == 1,
+        desc = km.desc,
+        replace_keycodes = (km.expr == 1 and km.replace_keycodes == 1) or nil,
+      })
+    end
+  end
+end
+
 ---@param force? boolean
 ---@param opt? vcs.File.AttachState
 function File:attach_buffer(force, opt)
@@ -371,6 +421,8 @@ function File:attach_buffer(force, opt)
           vim.diagnostic.disable(self.bufnr)
         end
       end
+
+      reassert_nowait_prefix_maps(self.bufnr, state.keymaps)
 
       File.attached[self.bufnr] = state
     end
