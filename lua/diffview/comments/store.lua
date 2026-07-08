@@ -313,24 +313,38 @@ end
 --#region locking + atomic write
 
 ---Keep the lockfile protocol in sync with the AI-side writer:
----skills/review/scripts/review_write.py (same lockfile name,
----retry count/interval, and stale-steal threshold).
+---skills/review/scripts/review_core.py (same lockfile name and stale-steal
+---threshold; retry cadence may differ — the CLI blocks, Neovim must not).
+M.LOCK_STALE_S = 10
+M.LOCK_RETRY_MS = 40
+M.LOCK_RETRIES = 25
+
+---One non-blocking attempt to take the lockfile.
 ---@param path string
 ---@return boolean acquired
-local function lock(path)
+local function try_lock(path)
   local lockfile = path .. ".lock"
-  for _ = 1, 5 do
-    local fd = uv.fs_open(lockfile, "wx", 384)
-    if fd then
-      uv.fs_close(fd)
-      return true
-    end
-    -- Steal stale locks (a crashed writer): older than 10s.
-    local stat = uv.fs_stat(lockfile)
-    if stat and os.time() - stat.mtime.sec > 10 then
-      pcall(uv.fs_unlink, lockfile)
-    else
-      uv.sleep(40)
+  local fd = uv.fs_open(lockfile, "wx", 384)
+  if fd then
+    uv.fs_close(fd)
+    return true
+  end
+
+  -- Steal stale locks (a crashed writer). The steal is atomic: rename the
+  -- stale lockfile to a unique name — only one contender's rename can
+  -- succeed — then unlink the claimed name. A plain unlink here would let
+  -- two writers both decide the lock is stale, with the second unlink
+  -- deleting the first stealer's freshly created lock.
+  local stat = uv.fs_stat(lockfile)
+  if stat and os.time() - stat.mtime.sec > M.LOCK_STALE_S then
+    local claimed = ("%s.stale.%d"):format(lockfile, uv.os_getpid())
+    if uv.fs_rename(lockfile, claimed) then
+      pcall(uv.fs_unlink, claimed)
+      fd = uv.fs_open(lockfile, "wx", 384)
+      if fd then
+        uv.fs_close(fd)
+        return true
+      end
     end
   end
   return false
@@ -370,35 +384,54 @@ end
 
 ---The single write entry point: lock, read fresh, apply the caller's delta,
 ---GC, write atomically, remember the content hash for self-suppression.
+---
+---Never blocks the UI: the first lock attempt runs inline (the uncontended
+---case completes synchronously), contention is retried from the event loop.
+---`on_done` is called exactly once — with the written doc, or with
+---(nil, err) once the retry budget runs out or the write fails.
 ---@param path string
 ---@param apply fun(doc: ReviewDoc) Mutates the freshly loaded doc.
----@return ReviewDoc? doc The written document (nil on failure).
----@return string? err
-function M.update(path, apply)
-  if not lock(path) then
-    return nil, "Could not lock the review file (another writer is stuck?)"
+---@param on_done? fun(doc?: ReviewDoc, err?: string)
+function M.update(path, apply, on_done)
+  local function locked_write()
+    local ok, result = pcall(function()
+      local doc = M.load(path)
+      apply(doc)
+      doc.version = M.VERSION
+      doc.review.updated_at = M.now()
+      M.gc(doc)
+
+      local content = M.encode(doc) .. "\n"
+      if not write_atomic(path, content) then
+        error("Failed to write the review file: " .. path)
+      end
+
+      M.last_written[path] = vim.fn.sha256(content)
+      return doc
+    end)
+
+    unlock(path)
+
+    if on_done then
+      if ok then on_done(result, nil) else on_done(nil, tostring(result)) end
+    end
   end
 
-  local ok, result = pcall(function()
-    local doc = M.load(path)
-    apply(doc)
-    doc.version = M.VERSION
-    doc.review.updated_at = M.now()
-    M.gc(doc)
+  local attempts = 0
+  local function attempt()
+    if try_lock(path) then return locked_write() end
 
-    local content = M.encode(doc) .. "\n"
-    if not write_atomic(path, content) then
-      error("Failed to write the review file: " .. path)
+    attempts = attempts + 1
+    if attempts >= M.LOCK_RETRIES then
+      if on_done then
+        on_done(nil, "Could not lock the review file (another writer is stuck?)")
+      end
+      return
     end
+    vim.defer_fn(attempt, M.LOCK_RETRY_MS)
+  end
 
-    M.last_written[path] = vim.fn.sha256(content)
-    return doc
-  end)
-
-  unlock(path)
-
-  if not ok then return nil, tostring(result) end
-  return result, nil
+  attempt()
 end
 
 ---Check whether the file's current content is our own last write.

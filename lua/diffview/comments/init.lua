@@ -74,12 +74,14 @@ function M.count_for(adapter, file_path)
 end
 
 ---Write through the store, stamping any threads we observed as outdated, then
----refresh every affected buffer.
+---refresh every affected buffer. Non-blocking: lock contention is retried
+---from the event loop. `opts.on_fail` runs if the write ultimately fails
+---(e.g. to salvage typed text), `opts.on_success` after the refresh.
 ---@param store_path string
 ---@param apply fun(doc: ReviewDoc)
----@return ReviewDoc?
-function M.update(store_path, apply)
-  local doc, err = store.update(store_path, function(doc)
+---@param opts? { on_success?: fun(doc: ReviewDoc), on_fail?: fun(err?: string) }
+function M.update(store_path, apply, opts)
+  store.update(store_path, function(doc)
     for _, t in ipairs(doc.threads) do
       local seen = M.observed[t.id]
       if seen == "outdated" and not t.outdated_since then
@@ -89,16 +91,17 @@ function M.update(store_path, apply)
       end
     end
     apply(doc)
+  end, function(doc, err)
+    if not doc then
+      utils.err("[diffview] " .. (err or "review write failed"))
+      if opts and opts.on_fail then opts.on_fail(err) end
+      return
+    end
+
+    M.docs[store_path] = doc
+    M.refresh_all(store_path)
+    if opts and opts.on_success then opts.on_success(doc) end
   end)
-
-  if not doc then
-    utils.err("[diffview] " .. (err or "review write failed"))
-    return
-  end
-
-  M.docs[store_path] = doc
-  M.refresh_all(store_path)
-  return doc
 end
 
 ---@param bufnr integer
@@ -154,9 +157,8 @@ function M.refresh_buf(bufnr)
   render.render(bufnr, place_threads(bufnr))
 end
 
----Re-read every known review file from disk and repaint. Exposed for the
----AI-side "nudge" (`nvim --remote-expr`); the fs-watcher covers the normal
----path.
+---Re-read every known review file from disk and repaint. The fs-watcher
+---makes this automatic; `:DiffviewReview reload` is the manual escape hatch.
 function M.reload()
   for path in pairs(M.docs) do
     local doc, warn = store.load(path)
@@ -363,7 +365,7 @@ local function open_input(opts)
   end
 
   local width = math.min(80, math.max(50, math.floor(vim.o.columns * 0.6)))
-  local win = api.nvim_open_win(buf, true, {
+  local win_opts = {
     relative = "cursor",
     row = 1,
     col = 0,
@@ -371,10 +373,18 @@ local function open_input(opts)
     height = 8,
     style = "minimal",
     border = "rounded",
-    title = (" %s — <C-s> submit · q cancel "):format(opts.title),
+    title = (" %s "):format(opts.title),
     title_pos = "left",
-  })
+  }
+  if vim.fn.has("nvim-0.10") == 1 then
+    win_opts.footer = { { " ⌃s submit · esc cancel ", "DiffviewCommentHint" } }
+    win_opts.footer_pos = "right"
+  else
+    win_opts.title = (" %s — <C-s> submit · q cancel "):format(opts.title)
+  end
+  local win = api.nvim_open_win(buf, true, win_opts)
   vim.wo[win].wrap = true
+  vim.wo[win].winhighlight = "NormalFloat:DiffviewCommentCard,FloatBorder:DiffviewCommentBorder"
 
   local function close()
     if api.nvim_win_is_valid(win) then api.nvim_win_close(win, true) end
@@ -389,6 +399,8 @@ local function open_input(opts)
   for _, mode in ipairs({ "n", "i" }) do
     vim.keymap.set(mode, "<C-s>", submit, { buffer = buf, nowait = true })
   end
+  -- Normal-mode <CR> submits too (insert-mode <CR> stays a newline).
+  vim.keymap.set("n", "<CR>", submit, { buffer = buf, nowait = true })
   vim.keymap.set("n", "q", close, { buffer = buf, nowait = true })
   vim.keymap.set("n", "<Esc>", close, { buffer = buf, nowait = true })
 
@@ -423,7 +435,7 @@ function M.comment_open()
     open_input({
       title = ("Reply · %s"):format(existing.id),
       on_submit = function(text)
-        local doc = M.update(ctx.store_path, function(doc)
+        M.update(ctx.store_path, function(doc)
           for _, t in ipairs(doc.threads) do
             if t.id == existing.id then
               t.comments[#t.comments + 1] = {
@@ -436,11 +448,12 @@ function M.comment_open()
               t.status = "open"
             end
           end
-        end)
-        if not doc then
-          vim.fn.setreg('"', text)
-          utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
-        end
+        end, {
+          on_fail = function()
+            vim.fn.setreg('"', text)
+            utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
+          end,
+        })
       end,
     })
     return
@@ -460,7 +473,7 @@ function M.comment_open()
   open_input({
     title = ("New comment · %s:%d"):format(ctx.path, src_lnum),
     on_submit = function(text)
-      local doc = M.update(ctx.store_path, function(doc)
+      M.update(ctx.store_path, function(doc)
         doc.threads[#doc.threads + 1] = {
           id = store.gen_id("t"),
           anchor = anchor_mod.make(ctx.path, side, rev, src_lnum, src_lnum, src_lines),
@@ -471,11 +484,12 @@ function M.comment_open()
             { id = store.gen_id("c"), author = author_name(), ts = store.now(), body = text },
           },
         }
-      end)
-      if not doc then
-        vim.fn.setreg('"', text)
-        utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
-      end
+      end, {
+        on_fail = function()
+          vim.fn.setreg('"', text)
+          utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
+        end,
+      })
     end,
   })
 end
@@ -507,7 +521,7 @@ function M.comment_edit()
     title = ("Edit · %s"):format(target.id),
     initial = target.body,
     on_submit = function(text)
-      local doc = M.update(ctx.store_path, function(doc)
+      M.update(ctx.store_path, function(doc)
         for _, t in ipairs(doc.threads) do
           if t.id == existing.id then
             for _, c in ipairs(t.comments) do
@@ -518,11 +532,12 @@ function M.comment_edit()
             end
           end
         end
-      end)
-      if not doc then
-        vim.fn.setreg('"', text)
-        utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
-      end
+      end, {
+        on_fail = function()
+          vim.fn.setreg('"', text)
+          utils.warn('[diffview] Write failed — comment text saved to the unnamed register.')
+        end,
+      })
     end,
   })
 end
@@ -635,9 +650,11 @@ function M.comment_clear_all()
     "&Delete\n&Cancel", 2)
   if choice ~= 1 then return end
 
-  if M.update(path, function(doc) doc.threads = {} end) then
-    utils.info(("[diffview] Cleared %d comment thread(s)."):format(n))
-  end
+  M.update(path, function(doc) doc.threads = {} end, {
+    on_success = function()
+      utils.info(("[diffview] Cleared %d comment thread(s)."):format(n))
+    end,
+  })
 end
 
 ---@param dir integer 1|-1
@@ -688,7 +705,10 @@ local function cmd_review(cmd_opts)
   end
   local path = store.path_for(adapter)
 
-  if sub == "clear" then
+  if sub == "reload" then
+    M.reload()
+    utils.info("[diffview] Review reloaded from disk.")
+  elseif sub == "clear" then
     M.update(path, function(doc) doc.threads = {} end)
     utils.info("[diffview] Review cleared.")
   elseif sub == "resolve-all" then
@@ -748,7 +768,7 @@ function M.init()
 
   api.nvim_create_user_command("DiffviewReview", cmd_review, {
     nargs = "?",
-    complete = function() return { "list", "clear", "resolve-all", "setup", "uninstall" } end,
+    complete = function() return { "list", "reload", "clear", "resolve-all", "setup", "uninstall" } end,
   })
 
   -- One-line, once-per-session nudge when the AI side isn't wired: opt-in

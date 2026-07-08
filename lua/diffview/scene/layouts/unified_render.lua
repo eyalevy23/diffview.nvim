@@ -46,6 +46,8 @@ local TS_BLOCK = 120
 ---@field w_old integer gutter width for old line numbers
 ---@field w_new integer gutter width for new line numbers
 ---@field col_cache table<integer, string> memoized statuscolumn strings
+---@field col_wrap? string statuscolumn for wrapped continuation rows
+---@field col_blank? string statuscolumn for virtual (virt_lines) rows
 ---@field ts_cache table<integer, false|{ [1]: integer, [2]: integer, [3]: string }[]>
 
 ---@type table<integer, UnifiedState>
@@ -122,6 +124,13 @@ end
 ---@return integer? bufnr
 local function source_lines(file)
   if file and file:is_valid() and not file.nulled then
+    -- A source that exists but was never loaded (session-restored buffer,
+    -- `bufadd()` from another plugin) reads as empty, which would render the
+    -- whole file as deleted. These sources are never shown in a window, so
+    -- nothing else will ever load them.
+    if not api.nvim_buf_is_loaded(file.bufnr) then
+      pcall(vim.fn.bufload, file.bufnr)
+    end
     return api.nvim_buf_get_lines(file.bufnr, 0, -1, false), file.bufnr
   end
   return {}, nil
@@ -302,11 +311,19 @@ local function apply_hl(bufnr, st, hunks, old_lines, new_lines)
       end
     end
 
+    -- The add/del bands are drawn as full-line RANGE highlights (hl_eol
+    -- carries them past EOL), NOT line_hl_group: as of nvim 0.12 a
+    -- line_hl_group background paints over range highlights regardless of
+    -- priority, which would swallow the word-level emphasis below.
     for k = sa, sa + ca - 1 do
       local row = st.row_of_old[k]
       if row then
         api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
-          line_hl_group = "DiffviewDiffDelete",
+          end_row = row,
+          end_col = 0,
+          hl_group = "DiffviewDiffDelete",
+          hl_eol = true,
+          strict = false,
           priority = 50,
         })
         for _, range in ipairs(range_for_old[k] or {}) do
@@ -325,7 +342,11 @@ local function apply_hl(bufnr, st, hunks, old_lines, new_lines)
       local row = st.row_of_new[k]
       if row then
         api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
-          line_hl_group = "DiffviewDiffAdd",
+          end_row = row,
+          end_col = 0,
+          hl_group = "DiffviewDiffAdd",
+          hl_eol = true,
+          strict = false,
           priority = 50,
         })
         for _, range in ipairs(range_for_new[k] or {}) do
@@ -411,10 +432,31 @@ end
 
 ---'statuscolumn' callback: dual gutter `old new ±` with a leading sign slot.
 ---O(1) per line after the first visit (memoized per rendered row).
+---Resolves the buffer from the window being drawn (g:statusline_winid), not
+---the current window — the column must not collapse when focus is elsewhere.
 function M.statuscol()
-  local buf = api.nvim_get_current_buf()
+  local win = vim.g.statusline_winid
+  local buf = (win and win ~= 0) and api.nvim_win_get_buf(win) or api.nvim_get_current_buf()
   local st = M.state[buf]
   if not st then return "" end
+
+  -- Non-buffer screen rows keep the gutter width but not the numbers:
+  -- wrapped continuation rows get a wrap marker in the marker slot (the text
+  -- area's breakindent/showbreak region can't take the diff line background,
+  -- so the unified window draws the marker here instead — see the window
+  -- opts in diff_1_unified), virt_lines rows (comment boxes) stay blank.
+  local virtnum = vim.v.virtnum
+  if virtnum > 0 then
+    if not st.col_wrap then
+      st.col_wrap = ("%%s%s%%#DiffviewNonText#↪%%* "):format((" "):rep(st.w_old + st.w_new + 2))
+    end
+    return st.col_wrap
+  elseif virtnum < 0 then
+    if not st.col_blank then
+      st.col_blank = "%s" .. (" "):rep(st.w_old + st.w_new + 4)
+    end
+    return st.col_blank
+  end
 
   local lnum = vim.v.lnum
   local cached = st.col_cache[lnum]

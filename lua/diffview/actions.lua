@@ -66,6 +66,16 @@ local function prepare_goto_file()
     if file == cur_file then
       local win = view.cur_layout:get_main_win()
       cursor = api.nvim_win_get_cursor(win.id)
+
+      -- In the unified layout the main window shows the rendered diff, not
+      -- the real file: a rendered row is offset from its source line by every
+      -- deleted line above it. Translate through the line map — jumping with
+      -- the raw row lands on the wrong line (clamped to EOF near the bottom).
+      local unified = require("diffview.scene.layouts.unified_render")
+      local buf = api.nvim_win_get_buf(win.id)
+      if unified.state[buf] then
+        cursor[1] = unified.edit_target(buf, cursor[1]) or cursor[1]
+      end
     end
 
     return file, cursor
@@ -180,7 +190,16 @@ function M.jump_to_edit()
   local buf = api.nvim_win_get_buf(main.id)
 
   if not unified.state[buf] then
-    return M.goto_file_edit()
+    -- The render state can be dropped while the buffer stays on screen (e.g.
+    -- its entry was torn down on a refresh). Re-render to restore the row
+    -- mapping before giving up on it: the fallback can only pass the raw
+    -- rendered row, which lands on the wrong source line.
+    if view.cur_layout.name == "diff1_unified" then
+      pcall(function() return view.cur_layout:_render() end)
+    end
+    if not unified.state[buf] then
+      return M.goto_file_edit()
+    end
   end
 
   local file = view.cur_entry

@@ -470,17 +470,86 @@ M.hl_links = {
   UnifiedNumNew = "LineNr",
   UnifiedSignAdd = "diffAdded",
   UnifiedSignDel = "diffRemoved",
-  CommentBorder = "FloatBorder",
-  CommentTitle = "Title",
-  CommentBody = "NormalFloat",
-  CommentDim = "Comment",
-  CommentOutdated = "Comment",
-  CommentAuthorHuman = "Identifier",
-  CommentAuthorAI = "Special",
-  CommentSuggestion = "diffAdded",
+  CommentSignHuman = "Identifier",
+  CommentSignAI = "Special",
+  CommentSignResolved = "Comment",
   CommentSignApplied = "diffAdded",
   CommentCount = "DiffviewFilePanelCounter",
 }
+
+---Mix `c1` over `c2` (both "#rrggbb") with weight `alpha`. Nil on anything
+---that isn't a gui hex color.
+---@param c1? string
+---@param c2? string
+---@param alpha number
+---@return string?
+function M.blend(c1, c2, alpha)
+  local r1, g1, b1 = (c1 or ""):match("^#(%x%x)(%x%x)(%x%x)$")
+  local r2, g2, b2 = (c2 or ""):match("^#(%x%x)(%x%x)(%x%x)$")
+  if not (r1 and r2) then return nil end
+
+  local function mix(a, b)
+    return math.floor(tonumber(a, 16) * alpha + tonumber(b, 16) * (1 - alpha) + 0.5)
+  end
+  return ("#%02x%02x%02x"):format(mix(r1, r2), mix(g1, g2), mix(b1, b2))
+end
+
+---Comment-card groups. The card reads as a slightly elevated surface: its
+---background is the normal bg nudged a few percent toward the foreground,
+---with border/separator/hint fading into it at decreasing contrast. Every
+---in-card group carries the card bg so the surface is seamless. Falls back
+---to plain links when gui colors can't be derived (cterm-only setups).
+function M.update_comment_hl()
+  local fg = M.get_fg("Normal", true)
+  local bg = M.get_bg("Normal", true)
+  local card = M.blend(fg, bg, 0.05)
+
+  if not card then
+    for from, to in pairs({
+      CommentCard = "NormalFloat",
+      CommentBody = "NormalFloat",
+      CommentBorder = "FloatBorder",
+      CommentBorderOutdated = "NonText",
+      CommentSeparator = "NonText",
+      CommentDim = "Comment",
+      CommentHint = "NonText",
+      CommentAuthorHuman = "Identifier",
+      CommentAuthorAI = "Special",
+      CommentInlineCode = "Special",
+      CommentOutdated = "Comment",
+      CommentSuggestion = "diffAdded",
+      CommentSuggestionAdd = "DiffAdd",
+    }) do
+      M.hi_link("Diffview" .. from, to, { default = true })
+    end
+    return
+  end
+
+  local dim = M.get_fg("Comment") or M.blend(fg, bg, 0.45)
+  local green = M.get_fg({ "diffAdded", "@diff.plus", "Character" }) or "#98c379"
+
+  local groups = {
+    CommentCard = { bg = card },
+    CommentBody = { fg = fg, bg = card },
+    CommentBorder = { fg = M.blend(fg, bg, 0.18), bg = card },
+    CommentBorderOutdated = { fg = M.blend(fg, bg, 0.10), bg = card },
+    CommentSeparator = { fg = M.blend(fg, bg, 0.10), bg = card },
+    CommentDim = { fg = dim, bg = card },
+    CommentHint = { fg = M.blend(fg, bg, 0.35), bg = card },
+    CommentAuthorHuman = { fg = M.get_fg("Identifier") or fg, bg = card, style = "bold" },
+    CommentAuthorAI = { fg = M.get_fg("Special") or fg, bg = card, style = "bold" },
+    CommentInlineCode = { fg = M.get_fg({ "@markup.raw", "String" }) or fg, bg = M.blend(fg, bg, 0.10) },
+    CommentOutdated = { fg = dim, bg = card, style = "italic" },
+    CommentSuggestion = { fg = green, bg = card, style = "bold" },
+    CommentSuggestionAdd = { fg = fg, bg = M.blend(green, bg, 0.14) },
+  }
+
+  for name, spec in pairs(groups) do
+    spec.explicit = true
+    spec.default = true
+    M.hi("Diffview" .. name, spec)
+  end
+end
 
 function M.update_diff_hl()
   local fg = M.get_fg("DiffDelete", true) or "NONE"
@@ -503,6 +572,7 @@ function M.setup()
   end
 
   M.update_diff_hl()
+  M.update_comment_hl()
 end
 
 return M

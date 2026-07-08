@@ -168,6 +168,13 @@ function File:_create_local_buffer()
 
     api.nvim_win_close(winid, true)
   else
+    -- The buffer may exist without being loaded (e.g. restored by a session
+    -- or `bufadd()`'d by another plugin). An unloaded buffer is "valid" but
+    -- has no line data, which breaks consumers that read the buffer without
+    -- ever displaying it in a window (the unified layout's hidden sources).
+    if not api.nvim_buf_is_loaded(self.bufnr) then
+      pcall(vim.fn.bufload, self.bufnr)
+    end
     -- NOTE: LSP servers might load buffers in the background and unlist
     -- them. Explicitly set the buffer as listed when loading it here.
     vim.bo[self.bufnr].buflisted = true

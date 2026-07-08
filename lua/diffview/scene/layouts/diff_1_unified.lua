@@ -187,15 +187,33 @@ function Diff1Unified:_refresh()
   end
 end
 
+-- Trailing debounce for source-edit re-renders: the diff repaints once you
+-- pause typing for this long. Renders while the view's tab is hidden are
+-- skipped entirely and caught up on tab enter.
+local REFRESH_DEBOUNCE_MS = 1000
+
+---Whether the unified window lives in the currently active tabpage.
+---@private
+---@return boolean
+function Diff1Unified:_is_visible()
+  return self.main:is_valid()
+    and api.nvim_win_get_tabpage(self.main.id) == api.nvim_get_current_tabpage()
+end
+
 ---Watch the new-side source buffer for edits (made via jump-to-edit or any
----other window) and re-render, debounced.
+---other window) and re-render, debounced. A hidden view is never re-rendered
+---for nobody — the refresh is deferred until its tab becomes current.
 ---@private
 function Diff1Unified:_watch_source()
   local src = self.b.file and self.b.file:is_valid() and self.b.file.bufnr or nil
   if not src or self._watched[src] then return end
   self._watched[src] = true
 
-  local work = debounce.debounce_trailing(200, false, vim.schedule_wrap(function()
+  local work = debounce.debounce_trailing(REFRESH_DEBOUNCE_MS, false, vim.schedule_wrap(function()
+    if not self:_is_visible() then
+      self._refresh_pending = true
+      return
+    end
     self:_refresh()
   end))
 
@@ -211,6 +229,21 @@ function Diff1Unified:_watch_source()
       self._watched[src] = nil
     end,
   })
+
+  if not self._catchup_au then
+    self._catchup_au = api.nvim_create_autocmd("TabEnter", {
+      callback = function()
+        if not self.main:is_valid() then
+          self._catchup_au = nil
+          return true -- delete the autocmd
+        end
+        if self._refresh_pending and self:_is_visible() then
+          self._refresh_pending = false
+          self:_refresh()
+        end
+      end,
+    })
+  end
 end
 
 ---@override
@@ -242,6 +275,16 @@ Diff1Unified.open_files = async.void(function(self)
   local win_is_new = api.nvim_win_get_buf(self.main.id) ~= file.bufnr
   local _, changed = self:_render()
 
+  -- Attach keymaps BEFORE the buffer enters the window: plugins that scan
+  -- buffer-local maps on BufEnter (e.g. which-key installing its instant
+  -- <leader> trigger) must see them, or every <leader> press in this buffer
+  -- stalls for 'timeoutlen' on native mapping disambiguation.
+  local config = require("diffview.config")
+  file:attach_buffer(false, {
+    keymaps = config.get_layout_keymaps(self),
+    disable_diagnostics = true,
+  })
+
   api.nvim_win_set_buf(self.main.id, file.bufnr)
 
   utils.set_local(self.main.id, {
@@ -253,16 +296,16 @@ Diff1Unified.open_files = async.void(function(self)
     foldmethod = "manual",
     foldenable = true,
     foldcolumn = "0",
+    -- Neovim never applies line backgrounds (line_hl_group) to the
+    -- breakindent/showbreak region of wrapped rows, which would punch a hole
+    -- in the add/del bands. Wrapped rows start flush at col 0 instead, and
+    -- the statuscolumn callback draws the wrap marker in the gutter.
+    breakindent = false,
+    showbreak = "NONE",
     signcolumn = "yes:1",
     statuscolumn = "%!v:lua.require'diffview.scene.layouts.unified_render'.statuscol()",
     foldtext = "v:lua.require'diffview.scene.layouts.unified_render'.foldtext()",
     fillchars = "fold:─,diff: ",
-  })
-
-  local config = require("diffview.config")
-  file:attach_buffer(false, {
-    keymaps = config.get_layout_keymaps(self),
-    disable_diagnostics = true,
   })
 
   if self.main:show_winbar_info() then
@@ -291,6 +334,10 @@ end
 
 ---@override
 function Diff1Unified:destroy()
+  if self._catchup_au then
+    pcall(api.nvim_del_autocmd, self._catchup_au)
+    self._catchup_au = nil
+  end
   local file = self.main.file
   if file and file.bufnr then
     unified.cleanup(file.bufnr)

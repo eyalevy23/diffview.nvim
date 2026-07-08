@@ -64,6 +64,29 @@ function M.init()
       M.close(get_tabnr(state))
     end,
   })
+  au("QuitPre", {
+    group = M.augroup,
+    pattern = "*",
+    callback = function(_)
+      -- The panel and the diff are one tool: `:q` in any window of a view
+      -- closes the whole view (see `quit_closes_view`). Floats (input
+      -- prompts etc.) quit normally.
+      if not config.get_config().quit_closes_view then return end
+
+      local view = lib.get_current_view()
+      if not view then return end
+      if api.nvim_win_get_config(0).relative ~= "" then return end
+
+      vim.schedule(function()
+        -- The quit window is gone by now. If it was the tab's last window,
+        -- the TabClosed handler has already disposed of the view.
+        if vim.tbl_contains(lib.views, view) and api.nvim_tabpage_is_valid(view.tabpage) then
+          view:close()
+          lib.dispose_view(view)
+        end
+      end)
+    end,
+  })
   au("BufWritePost", {
     group = M.augroup,
     pattern = "*",

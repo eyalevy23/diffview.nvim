@@ -308,8 +308,15 @@ function Diff1Inline:apply_inline_diff()
       for j = new_start, new_start + new_count - 1 do
         if j >= 1 and j <= #new_lines then
           local ranges = range_for_new[j]
+          -- Full-line RANGE highlight, not line_hl_group: as of nvim 0.12 a
+          -- line_hl_group background paints over range highlights regardless
+          -- of priority, swallowing the word-level emphasis below.
           api.nvim_buf_set_extmark(buf_b, ns, j - 1, 0, {
-            line_hl_group = "DiffviewDiffAdd",
+            end_row = j,
+            end_col = 0,
+            hl_group = "DiffviewDiffAdd",
+            hl_eol = true,
+            strict = false,
             priority = 50,
           })
           if ranges then

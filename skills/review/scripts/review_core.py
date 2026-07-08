@@ -7,7 +7,8 @@ module; nothing else may write the review file from the AI side.
 Keep in sync with the Neovim writer, lua/diffview/comments/store.lua (both
 sides carry matching comments):
   * lockfile protocol: <file>.lock, O_CREAT|O_EXCL, 5 tries x 40ms, steal
-    locks staler than 10s
+    locks staler than 10s via atomic rename-then-unlink (Neovim retries
+    from its event loop instead of sleeping, but steals the same way)
   * atomic write: <file>.tmp.<pid>, write-all + fsync, rename; never replace
     the target on a short write
   * pretty-printer: 2-space indent, KEY_ORDER-sorted keys
@@ -129,10 +130,17 @@ def acquire_lock(path):
             pass
         try:
             if time.time() - os.stat(lockfile).st_mtime > LOCK_STALE_S:
-                os.unlink(lockfile)  # steal a crashed writer's lock
+                # Steal a crashed writer's lock. Rename first — only one
+                # contender's rename can succeed — then unlink the claimed
+                # name. A plain unlink would let two writers both decide the
+                # lock is stale, the second unlink deleting the first
+                # stealer's freshly created lockfile.
+                claimed = "%s.stale.%d" % (lockfile, os.getpid())
+                os.rename(lockfile, claimed)
+                os.unlink(claimed)
                 continue
         except OSError:
-            continue  # lock vanished — retry immediately
+            continue  # lock vanished or lost the steal race — retry
         time.sleep(LOCK_SLEEP_S)
     raise ReviewError(
         4, "could not lock the review file (another writer is stuck? "

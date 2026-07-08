@@ -354,6 +354,9 @@ COMMANDS                                        *diffview-commands*
         Diffview. See |diffview-comments|. [subcommand] can be one of:
 
             • `list` (default): Echo all comment threads in the review.
+            • `reload`: Re-read the review file from disk and repaint (the
+              fs-watcher makes this automatic; this is the manual escape
+              hatch).
             • `clear`: Delete all comment threads.
             • `resolve-all`: Mark all open threads as resolved.
 
@@ -1539,7 +1542,7 @@ Default mappings in the view:
 
 The review can be managed with the |:DiffviewReview| command: >vim
 
-        :DiffviewReview {list|clear|resolve-all}
+        :DiffviewReview {list|reload|clear|resolve-all}
 <
 The file panel shows a per-file badge with the number of open threads
 (`🗨N`).
@@ -1562,24 +1565,70 @@ Groups used by the unified layout (|diffview-unified|):
                                       `diffAdded`.
         `DiffviewUnifiedSignDel`        The `-` sign for deleted lines. Links
                                       to `diffRemoved`.
+        `DiffviewDiffText`              Intra-line (word-level) emphasis on
+                                      added lines. Derived from your
+                                      colorscheme: the add band's background
+                                      nudged toward the diff-add green
+                                      (background only — syntax colors stay).
+                                      Falls back to |hl-DiffText| without gui
+                                      colors.
+        `DiffviewDiffDeleteText`        Intra-line emphasis on deleted lines.
+                                      Derived like `DiffviewDiffText`, from
+                                      the delete band and red.
 
 Groups used by the review comments (|diffview-comments|):
 
-        `DiffviewCommentBorder`         Thread border. Links to
-                                      |hl-FloatBorder|.
-        `DiffviewCommentTitle`          Thread title. Links to |hl-Title|.
-        `DiffviewCommentBody`           Comment body text. Links to
+Most card groups are DERIVED from your colorscheme at startup (and on
+|ColorScheme|): the card background is `Normal` nudged a few percent toward
+the foreground, and the border/separator/hint fade into it at decreasing
+contrast. All of them are defined with `default`, so any explicit definition
+in your config or colorscheme wins. On cterm-only setups they fall back to
+the links noted below.
+
+        `DiffviewCommentCard`           The card surface (background of the
+                                      whole thread card and the input float).
+                                      Falls back to |hl-NormalFloat|.
+        `DiffviewCommentBody`           Comment body text. Falls back to
                                       |hl-NormalFloat|.
+        `DiffviewCommentBorder`         Card border. Falls back to
+                                      |hl-FloatBorder|.
+        `DiffviewCommentBorderOutdated` Border of outdated cards. Falls back
+                                      to |hl-NonText|.
+        `DiffviewCommentSeparator`      Rule between comments in a thread.
+                                      Falls back to |hl-NonText|.
         `DiffviewCommentDim`            De-emphasized meta info (timestamps,
-                                      counts). Links to `Comment`.
-        `DiffviewCommentOutdated`       Threads whose anchor no longer
-                                      matches. Links to `Comment`.
-        `DiffviewCommentAuthorHuman`    Human comment authors. Links to
+                                      thread ids). Falls back to `Comment`.
+        `DiffviewCommentHint`           The interaction hint on the card and
+                                      the input float footer. Falls back to
+                                      |hl-NonText|.
+        `DiffviewCommentAuthorHuman`    Human comment authors. Falls back to
                                       `Identifier`.
-        `DiffviewCommentAuthorAI`       AI comment authors. Links to
+        `DiffviewCommentAuthorAI`       AI comment authors. Falls back to
                                       `Special`.
-        `DiffviewCommentSuggestion`     Suggestion blocks. Links to
+        `DiffviewCommentInlineCode`     Backtick `` `code` `` spans in comment
+                                      bodies. Falls back to `Special`.
+        `DiffviewCommentOutdated`       Body text of threads whose anchor no
+                                      longer matches. Falls back to `Comment`.
+        `DiffviewCommentSuggestion`     The suggestion label. Falls back to
                                       `diffAdded`.
+        `DiffviewCommentSuggestionAdd`  Suggestion replacement lines (tinted
+                                      like added lines). Falls back to
+                                      |hl-DiffAdd|. When a treesitter parser
+                                      for the anchored file's language is
+                                      available, suggestion code is syntax
+                                      highlighted over this background
+                                      (token colors combine with this
+                                      group's bg into derived
+                                      `DiffviewCommentSugg_*` groups).
+
+Sign-column groups (plain links, no card background):
+
+        `DiffviewCommentSignHuman`      Open-thread sign, human spoke last.
+                                      Links to `Identifier`.
+        `DiffviewCommentSignAI`         Open-thread sign, AI spoke last.
+                                      Links to `Special`.
+        `DiffviewCommentSignResolved`   Sign for resolved threads. Links to
+                                      `Comment`.
         `DiffviewCommentSignApplied`    Sign for threads whose suggestion has
                                       been applied. Links to `diffAdded`.
         `DiffviewCommentCount`          The open-thread badge in the file

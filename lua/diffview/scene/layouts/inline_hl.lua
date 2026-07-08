@@ -10,12 +10,14 @@ local api = vim.api
 local M = {}
 
 -- Word-level highlight is only meaningful when a deleted line and an added
--- line are genuinely a modification of one another. Be conservative: require
--- strong *content* similarity to pair two lines, and drop the highlight when
--- too much of the line changed (past that point a flat add/delete reads
--- better than scattered noise). Tune these if highlights feel too eager/shy.
-M.PAIR_MIN_SIMILARITY = 0.5
-M.MAX_CHANGE_RATIO = 0.5
+-- line are genuinely a modification of one another, and only readable when
+-- the result is a small number of clean ranges. The philosophy (borrowed
+-- from delta): show nothing rather than confetti — a flat add/delete reads
+-- better than a fragmented or mostly-emphasized line.
+M.PAIR_MIN_SIMILARITY = 0.5 -- min content similarity to align lines in n:m hunks
+M.MAX_EMPHASIS_RATIO = 0.6  -- flat when more than this much content is emphasized
+M.MAX_RANGES = 3            -- flat when a line needs more ranges than this
+M.WEAK_GAP_MAX_BYTES = 4    -- matched wordless gaps up to this wide merge into ranges
 
 -- Tokenize a line into runs of word chars, runs of whitespace, and single
 -- "other" chars (punctuation, multi-byte). Returns parallel arrays of token
@@ -82,67 +84,99 @@ function M.tokenize(s)
   }
 end
 
--- Run Myers on two token arrays. Returns a result table with:
---   ranges_a, ranges_b      -- coalesced { byte_start, byte_end_excl } lists
+---Common prefix + suffix byte count of two strings (capped so overlapping
+---affixes are not double counted).
+---@param a string
+---@param b string
+---@return integer
+local function common_affix(a, b)
+  local n = math.min(#a, #b)
+  local p = 0
+  while p < n and a:byte(p + 1) == b:byte(p + 1) do p = p + 1 end
+  local s = 0
+  while s < n - p and a:byte(#a - s) == b:byte(#b - s) do s = s + 1 end
+  return p + s
+end
+
+-- Run Myers on two token arrays. Returns a result table consumed by
+-- `ratio_filter()`:
+--   segs_a, segs_b          -- per-side segment runs { changed, s, e, has_word }
 --   changed_chars_a/b       -- bytes covered by deletes/replaces on each side
---   total_chars_a/b         -- total byte length of each side
+--   content_chars_a/b       -- byte length excluding leading/trailing whitespace
 --   similarity              -- matched word bytes / max word bytes
 function M.diff_tokens(tok_a, tok_b)
   local d = Diff(tok_a.tokens, tok_b.tokens)
   local script = d:create_edit_script()
 
-  local ranges_a, ranges_b = {}, {}
-  local cur_a_s, cur_a_e, cur_b_s, cur_b_e
-  local function flush_a()
-    if cur_a_s then
-      ranges_a[#ranges_a + 1] = { cur_a_s, cur_a_e }
-      cur_a_s, cur_a_e = nil, nil
-    end
-  end
-  local function flush_b()
-    if cur_b_s then
-      ranges_b[#ranges_b + 1] = { cur_b_s, cur_b_e }
-      cur_b_s, cur_b_e = nil, nil
-    end
+  local function new_side(tok)
+    return { tok = tok, segs = {}, changed = 0, cur = nil }
   end
 
+  local function push(side, changed, i)
+    local tok = side.tok
+    local s, e = tok.byte_starts[i], tok.byte_ends_excl[i]
+    -- Whitespace runs carry no information: they don't count toward the
+    -- emphasis ratio (so indent shifts don't drown a tiny real change).
+    local b1 = tok.tokens[i]:byte(1)
+    local nonws = (b1 == 0x20 or b1 == 0x09) and 0 or (e - s)
+    local cur = side.cur
+    if cur and cur.changed == changed then
+      cur.e = e
+      cur.has_word = cur.has_word or tok.is_word[i]
+      cur.nonws = cur.nonws + nonws
+    else
+      if cur then side.segs[#side.segs + 1] = cur end
+      side.cur = { changed = changed, s = s, e = e, has_word = tok.is_word[i], nonws = nonws }
+    end
+    if changed then side.changed = side.changed + (e - s) end
+  end
+
+  local A, B = new_side(tok_a), new_side(tok_b)
   local ai, bi = 1, 1
   local matched_word = 0
-  local changed_a, changed_b = 0, 0
 
   for _, op in ipairs(script) do
     if op == EditToken.NOOP then
-      flush_a(); flush_b()
+      push(A, false, ai)
+      push(B, false, bi)
       if tok_a.is_word[ai] then
         matched_word = matched_word + (tok_a.byte_ends_excl[ai] - tok_a.byte_starts[ai])
       end
       ai, bi = ai + 1, bi + 1
     elseif op == EditToken.DELETE then
-      local s, e = tok_a.byte_starts[ai], tok_a.byte_ends_excl[ai]
-      if cur_a_s then cur_a_e = e else cur_a_s, cur_a_e = s, e end
-      flush_b()
-      changed_a = changed_a + (e - s)
+      push(A, true, ai)
       ai = ai + 1
     elseif op == EditToken.INSERT then
-      local s, e = tok_b.byte_starts[bi], tok_b.byte_ends_excl[bi]
-      if cur_b_s then cur_b_e = e else cur_b_s, cur_b_e = s, e end
-      flush_a()
-      changed_b = changed_b + (e - s)
+      push(B, true, bi)
       bi = bi + 1
     elseif op == EditToken.REPLACE then
-      local sa, ea = tok_a.byte_starts[ai], tok_a.byte_ends_excl[ai]
-      if cur_a_s then cur_a_e = ea else cur_a_s, cur_a_e = sa, ea end
-      local sb, eb = tok_b.byte_starts[bi], tok_b.byte_ends_excl[bi]
-      if cur_b_s then cur_b_e = eb else cur_b_s, cur_b_e = sb, eb end
-      changed_a = changed_a + (ea - sa)
-      changed_b = changed_b + (eb - sb)
+      push(A, true, ai)
+      push(B, true, bi)
+      -- Partial credit: a replaced identifier that shares most of its bytes
+      -- (a rename, a changed suffix) still signals homologous lines. Without
+      -- this, one long changed identifier tanks the score of an otherwise
+      -- identical line.
+      if tok_a.is_word[ai] and tok_b.is_word[bi] then
+        matched_word = matched_word + common_affix(tok_a.tokens[ai], tok_b.tokens[bi])
+      end
       ai, bi = ai + 1, bi + 1
     end
   end
-  flush_a(); flush_b()
+  if A.cur then A.segs[#A.segs + 1] = A.cur end
+  if B.cur then B.segs[#B.segs + 1] = B.cur end
 
-  local total_a = (#tok_a.byte_ends_excl > 0) and tok_a.byte_ends_excl[#tok_a.byte_ends_excl] or 0
-  local total_b = (#tok_b.byte_ends_excl > 0) and tok_b.byte_ends_excl[#tok_b.byte_ends_excl] or 0
+  -- Content span: exclude pure-whitespace lead/tail so indentation doesn't
+  -- dilute the emphasis ratio.
+  local function content_chars(tok)
+    local first, last
+    for i = 1, #tok.tokens do
+      if tok.tokens[i]:match("%S") then
+        first = first or tok.byte_starts[i]
+        last = tok.byte_ends_excl[i]
+      end
+    end
+    return (first and last) and (last - first) or 0
+  end
 
   -- Content similarity: fraction of "word" bytes (identifiers, keywords,
   -- numbers) that matched. Whitespace and punctuation are deliberately
@@ -151,67 +185,152 @@ function M.diff_tokens(tok_a, tok_b)
   local word_denom = math.max(tok_a.word_total, tok_b.word_total, 1)
 
   return {
-    ranges_a = ranges_a,
-    ranges_b = ranges_b,
-    changed_chars_a = changed_a,
-    changed_chars_b = changed_b,
-    total_chars_a = total_a,
-    total_chars_b = total_b,
-    similarity = matched_word / word_denom,
+    segs_a = A.segs,
+    segs_b = B.segs,
+    changed_chars_a = A.changed,
+    changed_chars_b = B.changed,
+    content_chars_a = content_chars(tok_a),
+    content_chars_b = content_chars(tok_b),
+    similarity = math.min(matched_word / word_denom, 1),
   }
 end
 
--- Filter a diff result through the change-ratio threshold. If too much of
--- either line changed (> MAX_CHANGE_RATIO), the per-token highlights are noise --
--- return nil so the caller falls back to plain add/delete colors.
-function M.ratio_filter(result)
-  if not result then return nil, nil end
-  local ra = result.total_chars_a > 0 and result.changed_chars_a / result.total_chars_a or 0
-  local rb = result.total_chars_b > 0 and result.changed_chars_b / result.total_chars_b or 0
-  if ra > M.MAX_CHANGE_RATIO or rb > M.MAX_CHANGE_RATIO then return nil, nil end
-  return result.ranges_a, result.ranges_b
+---Coalesce one side's segments into display ranges. Changed runs separated
+---only by a narrow, wordless matched gap ("(", " = ", ", ") merge into one
+---range — fragmented confetti reads as noise.
+---@param segs { changed: boolean, s: integer, e: integer, has_word: boolean }[]
+---@return { [1]: integer, [2]: integer }[] ranges
+---@return integer emphasized total bytes covered
+local function coalesce(segs)
+  local ranges, emphasized = {}, 0
+  local i = 1
+  while i <= #segs do
+    local seg = segs[i]
+    if seg.changed then
+      local s, e = seg.s, seg.e
+      local nonws = seg.nonws
+      local j = i + 1
+      while j + 1 <= #segs
+        and not segs[j].changed
+        and not segs[j].has_word
+        and (segs[j].e - segs[j].s) <= M.WEAK_GAP_MAX_BYTES
+        and segs[j + 1].changed
+      do
+        e = segs[j + 1].e
+        nonws = nonws + segs[j].nonws + segs[j + 1].nonws
+        j = j + 2
+      end
+      ranges[#ranges + 1] = { s, e }
+      emphasized = emphasized + nonws
+      i = j
+    else
+      i = i + 1
+    end
+  end
+  return ranges, emphasized
 end
 
--- Greedily pair deleted lines with added lines by similarity score within a
--- single hunk. Returns a list of { oi, ni, result } where oi/ni are absolute
+-- Turn a diff result into display ranges — or nothing. This is the layer
+-- that makes word highlights readable; both gates reject the emphasis
+-- entirely (flat add/delete colors) rather than degrade it:
+--   * fragmentation: a line that needs more than MAX_RANGES ranges isn't
+--     summarizable — the highlight would be confetti
+--   * ratio: when most of a line's content is emphasized, the emphasis
+--     carries no information
+function M.ratio_filter(result)
+  if not result then return nil, nil end
+
+  local ranges_a, emph_a = coalesce(result.segs_a)
+  local ranges_b, emph_b = coalesce(result.segs_b)
+
+  if #ranges_a > M.MAX_RANGES or #ranges_b > M.MAX_RANGES then return nil, nil end
+
+  local qa = result.content_chars_a > 0 and emph_a / result.content_chars_a or 0
+  local qb = result.content_chars_b > 0 and emph_b / result.content_chars_b or 0
+  if qa > M.MAX_EMPHASIS_RATIO or qb > M.MAX_EMPHASIS_RATIO then return nil, nil end
+
+  return ranges_a, ranges_b
+end
+
+-- Pair deleted lines with added lines within one hunk, in order — pairs
+-- never cross, homologs keep their relative position (like delta's edit
+-- inference). Returns a list of { oi, ni, result } where oi/ni are absolute
 -- line indices and result is the cached diff_tokens output.
+--
+--   * a 1:1 hunk pairs unconditionally: a single edited line is THE common
+--     case, and the display gates in `ratio_filter()` are the real filter
+--   * larger hunks align via DP on content similarity: only pairs scoring
+--     at least PAIR_MIN_SIMILARITY can align; everything else stays flat
 function M.pair_lines(old_toks, new_toks, old_lines, new_lines,
                       old_start, old_count, new_start, new_count)
-  local candidates = {}
-  for oi = old_start, old_start + old_count - 1 do
-    local toa = old_toks[oi]
-    if toa then
-      local la = old_lines[oi]
-      for ni = new_start, new_start + new_count - 1 do
-        local tob = new_toks[ni]
-        if tob then
-          local lb = new_lines[ni]
-          if la ~= lb
-            and #la > 0 and #lb > 0
-            and #la <= 1000 and #lb <= 1000
-            and #toa.tokens <= 400 and #tob.tokens <= 400
-          then
-            local res = M.diff_tokens(toa, tob)
-            if res.similarity >= M.PAIR_MIN_SIMILARITY then
-              candidates[#candidates + 1] = {
-                oi = oi, ni = ni, similarity = res.similarity, result = res,
-              }
-            end
-          end
-        end
+  local function diffable(oi, ni)
+    local toa, tob = old_toks[oi], new_toks[ni]
+    if not (toa and tob) then return false end
+    local la, lb = old_lines[oi], new_lines[ni]
+    return la ~= lb
+      and #la > 0 and #lb > 0
+      and #la <= 1000 and #lb <= 1000
+      and #toa.tokens <= 400 and #tob.tokens <= 400
+  end
+
+  if old_count == 1 and new_count == 1 then
+    if not diffable(old_start, new_start) then return {} end
+    return { {
+      oi = old_start,
+      ni = new_start,
+      result = M.diff_tokens(old_toks[old_start], new_toks[new_start]),
+    } }
+  end
+
+  -- Memoized pair diffs, keyed by relative "i:j".
+  local results = {}
+  local function sim(i, j)
+    local oi, ni = old_start + i - 1, new_start + j - 1
+    local key = i .. ":" .. j
+    if results[key] == nil then
+      results[key] = diffable(oi, ni) and M.diff_tokens(old_toks[oi], new_toks[ni]) or false
+    end
+    local res = results[key]
+    return res and res.similarity or nil
+  end
+
+  -- Needleman-Wunsch over lines: maximize total similarity of aligned pairs.
+  local dp, choice = {}, {}
+  for i = 0, old_count do
+    dp[i] = {}
+    dp[i][0] = 0
+  end
+  for j = 0, new_count do dp[0][j] = 0 end
+
+  for i = 1, old_count do
+    choice[i] = {}
+    for j = 1, new_count do
+      local best, c = dp[i - 1][j], "up"
+      if dp[i][j - 1] > best then best, c = dp[i][j - 1], "left" end
+      local s = sim(i, j)
+      if s and s >= M.PAIR_MIN_SIMILARITY and dp[i - 1][j - 1] + s > best then
+        best, c = dp[i - 1][j - 1] + s, "diag"
       end
+      dp[i][j] = best
+      choice[i][j] = c
     end
   end
 
-  table.sort(candidates, function(a, b) return a.similarity > b.similarity end)
-
-  local taken_old, taken_new = {}, {}
   local pairs_list = {}
-  for _, c in ipairs(candidates) do
-    if not taken_old[c.oi] and not taken_new[c.ni] then
-      taken_old[c.oi] = true
-      taken_new[c.ni] = true
-      pairs_list[#pairs_list + 1] = c
+  local i, j = old_count, new_count
+  while i > 0 and j > 0 do
+    local c = choice[i][j]
+    if c == "diag" then
+      pairs_list[#pairs_list + 1] = {
+        oi = old_start + i - 1,
+        ni = new_start + j - 1,
+        result = results[i .. ":" .. j],
+      }
+      i, j = i - 1, j - 1
+    elseif c == "up" then
+      i = i - 1
+    else
+      j = j - 1
     end
   end
   return pairs_list
