@@ -95,6 +95,7 @@ npx skills add eyalevy23/diffview.nvim
 | Key | Action |
 |-----|--------|
 | `<CR>` | Reply to the thread on the line, or start a new one |
+| `E` | Read the thread in a scrollable float (toggles; long cards truncate inline at `comments.max_card_height` rows). Inside the float: `↵`/`r` reply, `e` edit, `a` apply, `s` resolve, `q` close |
 | `]t` / `[t` | Next / previous thread |
 | `<leader>gcc` | Reply / new comment |
 | `<leader>gce` | Edit your own comment |
@@ -356,10 +357,11 @@ require("diffview").setup({
       { "n", "]c",          actions.next_hunk,                      { desc = "Jump to the next hunk" } },
       { "n", "[c",          actions.prev_hunk,                      { desc = "Jump to the previous hunk" } },
       { "n", "<cr>",        actions.comment_open,                   { desc = "Comment: reply to the thread here, or start a new one" } },
+      { "n", "E",           actions.comment_read,                   { desc = "Comment: read the thread here in a scrollable float" } },
       { "n", "]t",          actions.next_comment,                   { desc = "Jump to the next comment thread" } },
       { "n", "[t",          actions.prev_comment,                   { desc = "Jump to the previous comment thread" } },
-      { "n", "<leader>cd",  actions.comment_resolve,                { desc = "Comment: toggle resolved on the thread here" } },
-      { "n", "<leader>cs",  actions.comment_apply,                  { desc = "Comment: apply the suggestion of the thread here" } },
+      { "n", "<leader>gcr", actions.comment_resolve,                { desc = "Comment: toggle resolved on the thread here" } },
+      { "n", "<leader>gca", actions.comment_apply,                  { desc = "Comment: apply the suggestion of the thread here" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",     actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
       { "n", "<leader>e",   actions.focus_files,                    { desc = "Bring focus to the file panel" } },

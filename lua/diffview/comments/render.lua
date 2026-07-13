@@ -334,15 +334,39 @@ end
 ---
 ---The first comment's author + time live in the top border so the card stays
 ---compact; every line lands at exactly `width` cells.
+---
+---Long threads truncate at `max_rows` total rows with a "⌄ N more lines ·
+---E to read" row — the cursor can never scroll *into* virt_lines, so a card
+---taller than the screen is unreadable inline; the full conversation lives in
+---the comment_read float. The build stops at the cap: hidden lines are never
+---wrapped or highlighted.
 ---@param thread ReviewThread
 ---@param width integer
 ---@param outdated boolean
+---@param max_rows integer|false|nil Cap on total card rows, borders included.
 ---@return table[][] virt_lines
-local function build_box(thread, width, outdated)
+local function build_box(thread, width, outdated, max_rows)
   local border_hl = outdated and "DiffviewCommentBorderOutdated" or "DiffviewCommentBorder"
   local body_hl = outdated and "DiffviewCommentOutdated" or "DiffviewCommentBody"
   local inner = width - 4
   local lines = {}
+
+  -- `budget` is how many rows may precede the bottom border. `raw_total` /
+  -- `raw_shown` count source lines (not wrapped rows), so the tail row can say
+  -- how much is hidden without building what it skips.
+  local budget = max_rows and (math.max(max_rows, 8) - 1) or math.huge
+  local truncated = false
+  local raw_total, raw_shown = 0, 0
+  if budget ~= math.huge then
+    for _, c in ipairs(thread.comments) do
+      local _, n = (c.body or ""):gsub("\n", "")
+      raw_total = raw_total + n + 1
+      if c.suggestion and c.suggestion.text then
+        local _, m = c.suggestion.text:gsub("\n", "")
+        raw_total = raw_total + m + 2 -- label row + code lines
+      end
+    end
+  end
 
   ---Pad a line's chunks to the card width and close it with the right rail.
   ---`pad_hl` lets block rows (suggestions) extend their tint to the rail.
@@ -400,6 +424,7 @@ local function build_box(thread, width, outdated)
   for ci, comment in ipairs(thread.comments) do
     -- Later comments get a soft separator and their own header row.
     if ci > 1 then
+      if #lines + 2 > budget then truncated = true break end
       lines[#lines + 1] = close_line({
         { "│ ", border_hl },
         { string.rep("╌", inner), "DiffviewCommentSeparator" },
@@ -409,11 +434,17 @@ local function build_box(thread, width, outdated)
 
     for _, raw in ipairs(vim.split(comment.body or "", "\n", { plain = true })) do
       for _, seg in ipairs(wrap(raw, inner)) do
+        if #lines >= budget then truncated = true break end
         lines[#lines + 1] = close_line(vim.list_extend({ { "│ ", border_hl } }, inline_chunks(seg, body_hl)))
       end
+      if truncated then break end
+      raw_shown = raw_shown + 1
     end
+    if truncated then break end
 
     if comment.suggestion and comment.suggestion.text then
+      if #lines + 2 > budget then truncated = true break end
+
       local rl = comment.suggestion.replace_lines
       local label = {
         { "│ ", border_hl },
@@ -423,6 +454,7 @@ local function build_box(thread, width, outdated)
         label[#label + 1] = { (" · replaces lines %d–%d"):format(rl[1] or 0, rl[2] or 0), "DiffviewCommentDim" }
       end
       lines[#lines + 1] = close_line(label)
+      raw_shown = raw_shown + 1
 
       -- Code lines hard-slice at the card width (word-wrap helps prose, not
       -- code) — slices stay exact substrings, so span byte offsets hold.
@@ -433,6 +465,7 @@ local function build_box(thread, width, outdated)
         local segs = raw ~= "" and split_word(raw, inner - 2) or { "" }
         local off = 0
         for si, seg in ipairs(segs) do
+          if #lines >= budget then truncated = true break end
           local chunks = {
             { "│ ", border_hl },
             { si == 1 and "+ " or "  ", "DiffviewCommentSuggestionAdd" },
@@ -441,8 +474,24 @@ local function build_box(thread, width, outdated)
           lines[#lines + 1] = close_line(chunks, "DiffviewCommentSuggestionAdd")
           off = off + #seg
         end
+        if truncated then break end
+        raw_shown = raw_shown + 1
       end
+      if truncated then break end
     end
+  end
+
+  -- Tail row: replace the last content row so the whole card (borders
+  -- included) never exceeds max_rows, and point at the reading surface.
+  if truncated then
+    while #lines > budget - 1 do table.remove(lines) end
+    local hidden = math.max(raw_total - raw_shown, 1)
+    lines[#lines + 1] = close_line({
+      { "│ ", border_hl },
+      { "⌄ ", "DiffviewCommentHint" },
+      { ("%d more line%s"):format(hidden, hidden == 1 and "" or "s"), "DiffviewCommentDim" },
+      { " · E to read", "DiffviewCommentHint" },
+    })
   end
 
   -- Bottom border: thread id on the left, a single quiet hint on the right —
@@ -476,6 +525,10 @@ function M.render(bufnr, placed)
   end
   width = math.min(width, MAX_CARD_WIDTH)
 
+  local conf = require("diffview.config").get_config().comments or {}
+  local max_rows = conf.max_card_height
+  if max_rows == nil then max_rows = 16 end
+
   local max_row = api.nvim_buf_line_count(bufnr)
 
   for _, p in ipairs(placed) do
@@ -500,7 +553,7 @@ function M.render(bufnr, placed)
 
     if thread.status == "open" then
       api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
-        virt_lines = build_box(thread, width, p.outdated),
+        virt_lines = build_box(thread, width, p.outdated, max_rows),
         virt_lines_above = false,
         priority = 60,
       })

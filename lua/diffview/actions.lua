@@ -275,6 +275,12 @@ function M.comment_open()
   require("diffview.comments").comment_open()
 end
 
+---Read the thread at the cursor line in a scrollable float (toggles). Falls
+---back to hover/keywordprg when there is no thread under the cursor.
+function M.comment_read()
+  require("diffview.comments").comment_read()
+end
+
 ---Edit your own latest comment on the thread at the cursor line.
 function M.comment_edit()
   require("diffview.comments").comment_edit()

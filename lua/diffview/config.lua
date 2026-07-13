@@ -59,6 +59,10 @@ M.defaults = {
     -- Card author glyphs (single-width nerd font): human (nf-fa-user), AI (nf-md-robot).
     icons = { human = "", ai = "󰚩" },
     -- author: comment author name; defaults to $USER (see comments/init.lua).
+    -- Tallest inline card, in screen rows (borders included). Longer threads
+    -- truncate with a "⌄ N more lines · E to read" row — the full conversation
+    -- opens in a scrollable float (comment_read). false disables the cap.
+    max_card_height = 16,
   },
   view = {
     default = {
@@ -134,6 +138,7 @@ M.defaults = {
       { "n", "]c",          actions.next_hunk,                      { desc = "Jump to the next hunk" } },
       { "n", "[c",          actions.prev_hunk,                      { desc = "Jump to the previous hunk" } },
       { "n", "<cr>",         actions.comment_open,                  { desc = "Comment: reply here / new thread" } },
+      { "n", "E",            actions.comment_read,                  { desc = "Comment: read thread in a float" } },
       { "n", "]t",           actions.next_comment,                  { desc = "Next comment thread" } },
       { "n", "[t",           actions.prev_comment,                  { desc = "Prev comment thread" } },
       { "n", "<leader>gcc",  actions.comment_open,                  { desc = "Comment: reply / new" } },
