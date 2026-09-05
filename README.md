@@ -20,6 +20,9 @@ Highlights of this fork:
   lines are real, selectable lines — with a dual line-number gutter, word-level
   diff highlights, Treesitter colors, folded unchanged regions, and `T` to jump
   to the real file for editing.
+- **Peek (`:DiffviewPeek`):** in any real file, a float showing what the line
+  looked like before — vs the index, vs the branch base, or the commit that
+  last touched it, with one-key walking through its history.
 - **AI-collaborative review comments:** GitHub-style threaded comments anchored
   to diff lines, stored in a shared review file that both you (in Neovim) and an
   AI agent (e.g. Claude, via the bundled `diff-nvim-review` skill) can read and
@@ -103,6 +106,64 @@ npx skills add eyalevy23/diffview.nvim
 | `<leader>gca` | Apply the suggestion to the file |
 | `<leader>gcn` / `<leader>gcp` | Next / previous thread |
 | `<leader>gcD` | Delete ALL threads (asks first) |
+
+### Find in the diff
+
+Two Telescope pickers scoped to whatever view is open (a commit, the
+uncommitted changes, the branch), for diffs too big to page through:
+
+| Key (in the view) | Action |
+|-----|--------|
+| `<leader>gf` | Fuzzy-find a file of the view; the preview is its patch |
+| `<leader>g/` | Fuzzy-find across every added / deleted line of the diff; lands on that exact row, deleted lines included |
+
+From outside a view, pass `{ open = <rev arg> }` to open one first:
+
+```lua
+vim.keymap.set("n", "<leader>g/", function()
+  require("diffview.pickers").pick_line({ open = "main...HEAD" })
+end)
+```
+
+### Peek: what was here before? (`:DiffviewPeek`)
+
+In any real file buffer, `:DiffviewPeek` opens a float under the cursor
+showing the hunk around the line as a mini unified diff — the same rendering
+as the view (word diff, Treesitter, dual gutter) — against one of three bases:
+
+| Base | Shows |
+|------|-------|
+| `index` | what your uncommitted edit replaced |
+| `branch` | what this branch changed vs its merge-base with `main`/`master` — or vs the base of an open diff view for the repo, so `T` into the real file and peek shows the same change |
+| `blame` | the commit that last touched the line and what it replaced: sha, author, age, subject |
+
+With no argument the base is picked for you: an open diff view's base, else
+the index, else blame — the first with a change at the cursor.
+`:DiffviewPeek <rev>` diffs against any rev.
+
+The float takes focus, so you can scroll it and yank the old code; inside it:
+
+| Key | Action |
+|-----|--------|
+| `b` | Cycle the base |
+| `<` / `>` | Blame: one commit older / newer for this line |
+| `]c` / `[c` | Next / previous hunk (the file cursor follows) |
+| `o` / `<CR>` | Open this change in a full diff view, at this line |
+| `s` | Blame: yank the sha |
+| `K` | Blame: toggle the full commit message |
+| `q` | Close |
+
+Deleted lines carry a right-aligned `author · age` label: who wrote what the
+change removes. No gitsigns dependency — keep it for the gutter, use this
+for the story.
+
+```lua
+vim.keymap.set("n", "<leader>gp", function()
+  require("diffview.peek").open()
+end, { desc = "Peek: what was here before" })
+```
+
+Config (defaults): `peek = { trunk = { "main", "master" }, max_height = 0.6, blame_deleted = true }`.
 
 ### For contributors
 

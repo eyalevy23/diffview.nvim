@@ -64,6 +64,16 @@ M.defaults = {
     -- opens in a scrollable float (comment_read). false disables the cap.
     max_card_height = 16,
   },
+  peek = {
+    -- Refs tried in order for the branch base (merge-base with HEAD); falls
+    -- back to origin/HEAD. An open diff view of the working tree wins.
+    trunk = { "main", "master" },
+    -- Tallest float, as a fraction of the editor height.
+    max_height = 0.6,
+    -- Right-aligned "author · when" labels on deleted lines (who wrote what
+    -- the change removes).
+    blame_deleted = true,
+  },
   view = {
     default = {
       layout = "diff1_unified",
@@ -148,6 +158,8 @@ M.defaults = {
       { "n", "<leader>gcn",  actions.next_comment,                  { desc = "Comment: next thread" } },
       { "n", "<leader>gcp",  actions.prev_comment,                  { desc = "Comment: prev thread" } },
       { "n", "<leader>gcD",  actions.comment_clear_all,             { desc = "Comment: delete ALL (confirm)" } },
+      { "n", "<leader>gf",   actions.find_file,                     { desc = "Find file in diff" } },
+      { "n", "<leader>g/",   actions.find_in_diff,                  { desc = "Find changed line in diff" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",     actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
       { "n", "<leader>e",   actions.focus_files,                    { desc = "Bring focus to the file panel" } },
@@ -217,6 +229,8 @@ M.defaults = {
       { "n", "gf",             actions.goto_file_edit,                 { desc = "Open the file in the previous tabpage" } },
       { "n", "<C-w><C-f>",     actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",        actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
+      { "n", "<leader>gf",     actions.find_file,                      { desc = "Find file in diff" } },
+      { "n", "<leader>g/",     actions.find_in_diff,                   { desc = "Find changed line in diff" } },
       { "n", "i",              actions.listing_style,                  { desc = "Toggle between 'list' and 'tree' views" } },
       { "n", "f",              actions.toggle_flatten_dirs,            { desc = "Flatten empty subdirectories in tree listing style" } },
       { "n", "R",              actions.refresh_files,                  { desc = "Update stats and entries in the file list" } },
@@ -233,6 +247,7 @@ M.defaults = {
       { "n", "dX",             actions.conflict_choose_all("none"),    { desc = "Delete the conflict region for the whole file" } },
     },
     file_history_panel = {
+      { "n", "<leader>gf",    actions.find_file,                   { desc = "Find file in diff" } },
       { "n", "g!",            actions.options,                     { desc = "Open the option panel" } },
       { "n", "<C-A-d>",       actions.open_in_diffview,            { desc = "Open the entry under the cursor in a diffview" } },
       { "n", "y",             actions.copy_hash,                   { desc = "Copy the commit hash of the entry under the cursor" } },
@@ -273,6 +288,20 @@ M.defaults = {
     help_panel = {
       { "n", "q",     actions.close,  { desc = "Close help menu" } },
       { "n", "<esc>", actions.close,  { desc = "Close help menu" } },
+    },
+    peek = {
+      -- Inside the peek float (|diffview-peek|).
+      { "n", "q",     actions.peek_close,           { desc = "Close the peek" } },
+      { "n", "<esc>", actions.peek_close,           { desc = "Close the peek" } },
+      { "n", "b",     actions.peek_cycle_base,      { desc = "Cycle the base: index / branch / blame" } },
+      { "n", "<",     actions.peek_older,           { desc = "Blame: one commit older for this line" } },
+      { "n", ">",     actions.peek_newer,           { desc = "Blame: one commit newer" } },
+      { "n", "]c",    actions.peek_next_hunk,       { desc = "Next hunk" } },
+      { "n", "[c",    actions.peek_prev_hunk,       { desc = "Previous hunk" } },
+      { "n", "o",     actions.peek_open_diffview,   { desc = "Open this change in a diff view" } },
+      { "n", "<cr>",  actions.peek_open_diffview,   { desc = "Open this change in a diff view" } },
+      { "n", "s",     actions.peek_yank_sha,        { desc = "Blame: yank the commit sha" } },
+      { "n", "K",     actions.peek_toggle_message,  { desc = "Blame: toggle the full commit message" } },
     },
   },
 }

@@ -311,6 +311,33 @@ function M.prev_comment()
   require("diffview.comments").comment_nav(-1)
 end
 
+---Peek: a float over the real file showing the change around the cursor
+---line — vs the index, vs the branch base, or the commit that last touched
+---it (blame). See |diffview-peek|. Global: works in any file buffer.
+function M.peek()
+  require("diffview.peek").open()
+end
+
+---Fuzzy-find a file of the current view (Telescope when available).
+function M.find_file()
+  require("diffview.pickers").pick_file()
+end
+
+---Fuzzy-find across every changed line of the current diff.
+function M.find_in_diff()
+  require("diffview.pickers").pick_line()
+end
+
+-- In-float peek actions.
+for _, name in ipairs({
+  "close", "cycle_base", "older", "newer", "open_diffview", "yank_sha",
+  "toggle_message", "next_hunk", "prev_hunk",
+}) do
+  M["peek_" .. name] = function()
+    require("diffview.peek")[name]()
+  end
+end
+
 ---@class diffview.ConflictCount
 ---@field total integer
 ---@field current integer

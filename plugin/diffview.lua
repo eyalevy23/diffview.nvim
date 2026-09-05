@@ -50,6 +50,17 @@ command("DiffviewRefresh", function()
   diffview.emit("refresh_files")
 end, { nargs = 0, bang = true })
 
+command("DiffviewPeek", function(ctx)
+  require("diffview.peek").open({ base = ctx.args ~= "" and ctx.args or nil })
+end, {
+  nargs = "?",
+  complete = function(arg_lead)
+    return vim.tbl_filter(function(m)
+      return m:find(arg_lead, 1, true) == 1
+    end, { "index", "branch", "blame" })
+  end,
+})
+
 command("DiffviewLog", function()
   vim.cmd(("sp %s | norm! G"):format(
     vim.fn.fnameescape(DiffviewGlobal.logger.outfile)

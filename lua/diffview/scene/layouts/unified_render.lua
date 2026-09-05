@@ -137,12 +137,14 @@ local function source_lines(file)
 end
 
 ---Compute the interleaved unified lines + line map from two line arrays.
+---Also the engine behind the peek float (diffview/peek.lua), so a hunk reads
+---the same there as in the view.
 ---@param old_lines string[]
 ---@param new_lines string[]
 ---@return string[] lines
 ---@return UnifiedState st (partially filled: maps, hunks, fold ranges)
 ---@return table hunks the vim.diff hunks (sorted by new position)
-local function build(old_lines, new_lines)
+function M.build(old_lines, new_lines)
   local old_text = table.concat(old_lines, "\n") .. "\n"
   local new_text = table.concat(new_lines, "\n") .. "\n"
 
@@ -281,21 +283,23 @@ local function build(old_lines, new_lines)
 end
 
 ---Apply persistent highlight extmarks: add/del line backgrounds + word-level
----change ranges (via the shared inline_hl pairing).
+---change ranges (via the shared inline_hl pairing). Hunks whose source lines
+---have no row in `st` (e.g. outside a peek slice) are skipped.
 ---@param bufnr integer
 ---@param st UnifiedState
 ---@param hunks table
 ---@param old_lines string[]
 ---@param new_lines string[]
-local function apply_hl(bufnr, st, hunks, old_lines, new_lines)
+function M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
   api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
 
   for _, hunk in ipairs(hunks) do
     local sa, ca, sb, cb = hunk[1], hunk[2], hunk[3], hunk[4]
+    local present = (ca > 0 and st.row_of_old[sa]) or (cb > 0 and st.row_of_new[sb])
 
     -- Word-level ranges, keyed by absolute source line index.
     local range_for_old, range_for_new = {}, {}
-    if ca > 0 and cb > 0 and ca * cb <= HUNK_PAIR_CAP then
+    if present and ca > 0 and cb > 0 and ca * cb <= HUNK_PAIR_CAP then
       local old_toks, new_toks = {}, {}
       for k = sa, sa + ca - 1 do
         if old_lines[k] then old_toks[k] = inline_hl.tokenize(old_lines[k]) end
@@ -384,7 +388,7 @@ function M.render(bufnr, file_a, file_b)
     return prev, false
   end
 
-  local lines, st, hunks = build(old_lines, new_lines)
+  local lines, st, hunks = M.build(old_lines, new_lines)
   st.buf_a, st.buf_b = buf_a, buf_b
   st.tick_a, st.tick_b = tick_a, tick_b
 
@@ -393,7 +397,7 @@ function M.render(bufnr, file_a, file_b)
   vim.bo[bufnr].modifiable = false
 
   M.state[bufnr] = st
-  apply_hl(bufnr, st, hunks, old_lines, new_lines)
+  M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
 
   -- Color the default-visible region up front (normal context — parser
   -- creation is not allowed during redraw). Rows inside folds fill lazily via
@@ -409,6 +413,53 @@ function M.render(bufnr, file_a, file_b)
   })
 
   return st, true
+end
+
+---A state covering only rows `first..last` of `st`, re-indexed from 1. The
+---peek float shows one hunk cluster of a whole-file diff through this: the
+---statuscolumn, Treesitter and highlight code all read the sliced state
+---exactly as they read a full one. Source buffers and ticks carry over.
+---@param st UnifiedState
+---@param first integer
+---@param last integer
+---@return UnifiedState
+function M.slice(st, first, last)
+  local sub = {
+    line_map = {},
+    row_of_new = {},
+    row_of_old = {},
+    hunk_rows = {},
+    fold_ranges = {},
+    visible_ranges = { { 1, last - first + 1 } },
+    buf_a = st.buf_a,
+    buf_b = st.buf_b,
+    tick_a = st.tick_a,
+    tick_b = st.tick_b,
+    w_old = st.w_old,
+    w_new = st.w_new,
+    col_cache = {},
+    ts_cache = {},
+    ts_pending = {},
+    ts_avail = {},
+  }
+
+  for r = first, last do
+    local info = st.line_map[r]
+    local nr = r - first + 1
+    sub.line_map[nr] = info
+    if info then
+      if info.old_lnum then sub.row_of_old[info.old_lnum] = nr end
+      if info.new_lnum then sub.row_of_new[info.new_lnum] = nr end
+    end
+  end
+
+  for _, r in ipairs(st.hunk_rows) do
+    if r >= first and r <= last then
+      sub.hunk_rows[#sub.hunk_rows + 1] = r - first + 1
+    end
+  end
+
+  return sub
 end
 
 ---Fold the unchanged gaps in a window displaying a rendered buffer.

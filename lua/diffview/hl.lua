@@ -425,6 +425,7 @@ function M.get_hl_groups()
     FilePanelCounter = { fg = M.get_fg("Identifier") or colors.purple, style = "bold" },
     FilePanelFileName = { fg = M.get_fg("Normal") or colors.white },
     Dim1 = { fg = M.get_fg("Comment") or colors.white },
+    PeekSubject = { fg = M.get_fg("Title") or colors.blue, style = "bold" },
     Primary = { fg = M.get_fg("Function") or "Purple" },
     Secondary = { fg = M.get_fg("String") or "Orange" },
   }
@@ -475,6 +476,11 @@ M.hl_links = {
   CommentSignResolved = "Comment",
   CommentSignApplied = "diffAdded",
   CommentCount = "DiffviewFilePanelCounter",
+  PeekBody = "Normal",
+  PeekBlame = "Comment",
+  PeekHint = "NonText",
+  PeekBorder = "FloatBorder",
+  PeekTitle = "FloatTitle",
 }
 
 ---Mix `c1` over `c2` (both "#rrggbb") with weight `alpha`. Nil on anything

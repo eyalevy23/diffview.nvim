@@ -360,6 +360,13 @@ COMMANDS                                        *diffview-commands*
             • `clear`: Delete all comment threads.
             • `resolve-all`: Mark all open threads as resolved.
 
+                                                *:DiffviewPeek*
+:DiffviewPeek [base]
+
+        In a real file buffer: open the peek float for the cursor line. See
+        |diffview-peek|. [base] is one of `index`, `branch`, `blame`, or any
+        git rev. Without it the base is chosen automatically.
+
 ==============================================================================
 
 CONFIGURATION                                   *diffview-config*
@@ -1002,6 +1009,20 @@ focus_files                                     *diffview-actions-focus_files*
         Bring focus to the file panel of the subject. Opens the panel if it's
         closed.
 
+find_file                                       *diffview-actions-find_file*
+        Contexts: `view`, `panel`
+
+        Fuzzy-find a file of the current view and open it (Telescope when
+        available, |vim.ui.select()| otherwise). The preview shows the
+        file's patch.
+
+find_in_diff                                    *diffview-actions-find_in_diff*
+        Contexts: `diff_view`, `file_panel`
+
+        Fuzzy-find across every added / deleted line of the current diff
+        and jump to it — deleted lines land on their `-` row in the unified
+        layout.
+
 goto_file                                       *diffview-actions-goto_file*
         Contexts: `view`, `panel`
 
@@ -1107,6 +1128,15 @@ open_in_diffview                                *diffview-actions-open_in_diffvi
         Contexts: `file_history_view`, `file_history_panel`
 
         Open the subject in a new Diffview.
+
+peek                                            *diffview-actions-peek*
+        Contexts: any real file buffer
+
+        Open the peek float for the cursor line. See |diffview-peek|. The
+        `peek_*` actions (`peek_close`, `peek_cycle_base`, `peek_older`,
+        `peek_newer`, `peek_next_hunk`, `peek_prev_hunk`,
+        `peek_open_diffview`, `peek_yank_sha`, `peek_toggle_message`) are the
+        in-float actions, bound through `keymaps.peek`.
 
 options                                         *diffview-actions-options*
         Contexts: `file_history_view`, `file_history_panel`
@@ -1400,6 +1430,14 @@ T                       Open the real file for editing at the line mapped
                         See |diffview-file-inference| for details on how
                         the file target is determined.
 
+                                                *diffview-maps-find_file*
+<leader>gf              Fuzzy-find a file of this view. See
+                        |diffview-actions-find_file|.
+
+                                                *diffview-maps-find_in_diff*
+<leader>g/              Fuzzy-find a changed line anywhere in this diff. See
+                        |diffview-actions-find_in_diff|.
+
                                                 *diffview-maps-toggle_files*
 <leader>b               Toggle the file panel.
 
@@ -1549,6 +1587,64 @@ The file panel shows a per-file badge with the number of open threads
 
 ==============================================================================
 
+PEEK                                            *diffview-peek*
+
+`:DiffviewPeek` (|:DiffviewPeek|) opens a float under the cursor of any real
+file buffer showing the hunk around the cursor line as a mini unified diff —
+rendered by the unified layout's own engine (|diffview-unified|): deleted
+then added lines, word-level emphasis, per-line Treesitter colors and the
+dual `old# new# ±` gutter — against a "base":
+
+        `index`     What the uncommitted edit replaced (unsaved edits count).
+        `branch`    What this branch changed: vs the left side of an open
+                  diff view of the working tree for this repo (so jumping
+                  to the real file with `T` and peeking shows the very same
+                  change), else vs the merge-base of HEAD with the first of
+                  `peek.trunk` that exists, else with `origin/HEAD`. Skipped
+                  while on the trunk itself.
+        `blame`     The commit that last touched the line and what it
+                  replaced. The title carries sha, author and age; the
+                  subject sits above the hunk. Renames are followed.
+        any rev   Diff the buffer against that rev.
+
+Without a base the first of `branch`, `index`, `blame` that has a change at
+the cursor is shown. The float takes focus: scroll it, yank the old code,
+`q` to leave. Leaving it any other way closes it as well.
+
+Deleted lines carry a right-aligned `author · age` label (who wrote what the
+change removes); lines never committed read `uncommitted`.
+
+Default mappings inside the float (`keymaps.peek`):
+
+        `b`         Cycle the base: index / branch / blame.
+        `<` / `>`     Blame: one commit older / newer for this same line.
+                  "Older" follows the line paired with the target in the
+                  hunk (the hunk's first deleted line when there is no
+                  pairing); a line born in the shown commit has nothing
+                  older.
+        `]c` / `[c`   Next / previous hunk. For index / branch the file's
+                  cursor follows the float.
+        `o` / `<CR>`  Escalate: open this change in a diff view at this
+                  line — an already open view for the same rev is reused.
+        `s`         Blame: yank the commit sha.
+        `K`         Blame: toggle the full commit message.
+        `q`         Close.
+
+Lua API: >lua
+        require("diffview.peek").open({ base = "blame" })  -- base optional
+<
+Config: >lua
+        peek = {
+          trunk = { "main", "master" }, -- refs tried for the branch base
+          max_height = 0.6,             -- fraction of the editor height
+          blame_deleted = true,         -- author labels on deleted lines
+        },
+<
+Peek needs nothing but git: every base is one `git show` per side plus an
+in-process |vim.diff()|; blame mode is one `git blame -L` per step.
+
+==============================================================================
+
 HIGHLIGHTS                                      *diffview-highlights*
 
 All the highlight groups used by the plugin follow the `Diffview*` naming
@@ -1575,6 +1671,20 @@ Groups used by the unified layout (|diffview-unified|):
         `DiffviewDiffDeleteText`        Intra-line emphasis on deleted lines.
                                       Derived like `DiffviewDiffText`, from
                                       the delete band and red.
+
+Groups used by the peek float (|diffview-peek|):
+
+        `DiffviewPeekSubject`           The commit subject above the hunk.
+                                      Bold, in `Title`'s color.
+        `DiffviewPeekBody`              The expanded commit message. Links to
+                                      |hl-Normal|.
+        `DiffviewPeekBlame`             `author · age` labels on deleted
+                                      lines. Links to `Comment`.
+        `DiffviewPeekHint`              The key hints in the footer. Links to
+                                      |hl-NonText|.
+        `DiffviewPeekBorder`            Float border. Links to
+                                      |hl-FloatBorder|.
+        `DiffviewPeekTitle`             Float title. Links to |hl-FloatTitle|.
 
 Groups used by the review comments (|diffview-comments|):
 
