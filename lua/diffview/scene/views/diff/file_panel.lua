@@ -83,6 +83,26 @@ function FilePanel:setup_buffer()
 
   local help_keymap = config.find_help_keymap(conf.keymaps.file_panel)
   if help_keymap then self.help_mapping = help_keymap[2] end
+
+  if conf.file_panel.full_name then
+    local full_name = require("diffview.ui.full_name")
+    -- Keyed by buffer: one panel's float never belongs to another's rows, and
+    -- re-running setup on the same buffer replaces the pair rather than
+    -- stacking a second one.
+    local group = api.nvim_create_augroup("diffview_full_name_" .. self.bufid, { clear = true })
+
+    api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, {
+      group = group,
+      buffer = self.bufid,
+      callback = function() full_name.show(self) end,
+    })
+
+    api.nvim_create_autocmd({ "BufLeave", "WinLeave" }, {
+      group = group,
+      buffer = self.bufid,
+      callback = function() full_name.hide() end,
+    })
+  end
 end
 
 function FilePanel:update_components()

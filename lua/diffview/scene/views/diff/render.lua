@@ -29,6 +29,11 @@ end
 ---Lay out one row as [ fixed left ][ flex … ][ pinned right ] and write it to
 ---`comp`. The right region always renders in full, flush against the panel's
 ---right edge; the flex region gets whatever columns are left and truncates.
+---
+---When the flex region does get cut, the untruncated left+flex chunks are
+---stashed on `comp.full_row` for the overflow float to draw (ui/full_name.lua);
+---when it does not, the stash is cleared, so a row never advertises an
+---overflow it no longer has.
 ---@param comp  RenderComponent
 ---@param left  RowChunk[]
 ---@param flex  RowChunk[]
@@ -44,7 +49,7 @@ local function render_row(comp, left, flex, right, width)
 
   for _, c in ipairs(left) do comp:add_text(c[1], c[2]) end
 
-  local used = 0
+  local used, clipped = 0, false
 
   for _, c in ipairs(flex) do
     local w = vim.fn.strdisplaywidth(c[1])
@@ -53,6 +58,7 @@ local function render_row(comp, left, flex, right, width)
       comp:add_text(c[1], c[2])
       used = used + w
     else
+      clipped = true
       local text = truncate_text(c[1], budget - used)
 
       if text ~= "" then
@@ -69,6 +75,7 @@ local function render_row(comp, left, flex, right, width)
 
   for _, c in ipairs(right) do comp:add_text(c[1], c[2]) end
 
+  comp.full_row = clipped and utils.vec_join(left, flex) or nil
 
   comp:ln()
 end

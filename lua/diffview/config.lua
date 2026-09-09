@@ -93,6 +93,9 @@ M.defaults = {
   },
   file_panel = {
     listing_style = "tree",
+    -- Draw the complete text of the row under the cursor in a float over it,
+    -- when it was too long for the panel to show in full.
+    full_name = true,
     tree_options = {
       flatten_dirs = true,
       folder_statuses = "only_folded"
