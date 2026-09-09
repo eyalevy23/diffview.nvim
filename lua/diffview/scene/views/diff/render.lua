@@ -23,9 +23,59 @@ local function truncate_text(text, budget)
   return vim.fn.strcharpart(text, 0, lo) .. "…"
 end
 
----Render one file row as [ fixed left ][ flex name… ][ pinned right ]: the
----conflict marker, comment badge and stats are flush to the panel's right
----edge and always render in full — a long name truncates, never them.
+---A run of text with an optional highlight group: `{ text, hl_group? }`.
+---@alias RowChunk { [1]: string, [2]: string? }
+
+---Lay out one row as [ fixed left ][ flex … ][ pinned right ] and write it to
+---`comp`. The right region always renders in full, flush against the panel's
+---right edge; the flex region gets whatever columns are left and truncates.
+---@param comp  RenderComponent
+---@param left  RowChunk[]
+---@param flex  RowChunk[]
+---@param right RowChunk[]
+---@param width integer Panel text width.
+local function render_row(comp, left, flex, right, width)
+  local left_w, right_w = 0, 0
+  for _, c in ipairs(left) do left_w = left_w + vim.fn.strdisplaywidth(c[1]) end
+  for _, c in ipairs(right) do right_w = right_w + vim.fn.strdisplaywidth(c[1]) end
+
+  -- Keep at least a sliver of the flex text even when the row overflows.
+  local budget = math.max(width - left_w - right_w, 3)
+
+  for _, c in ipairs(left) do comp:add_text(c[1], c[2]) end
+
+  local used = 0
+
+  for _, c in ipairs(flex) do
+    local w = vim.fn.strdisplaywidth(c[1])
+
+    if used + w <= budget then
+      comp:add_text(c[1], c[2])
+      used = used + w
+    else
+      local text = truncate_text(c[1], budget - used)
+
+      if text ~= "" then
+        comp:add_text(text, c[2])
+        used = used + vim.fn.strdisplaywidth(text)
+      end
+
+      break
+    end
+  end
+
+  local pad = width - left_w - used - right_w
+  if pad > 0 then comp:add_text(string.rep(" ", pad)) end
+
+  for _, c in ipairs(right) do comp:add_text(c[1], c[2]) end
+
+
+  comp:ln()
+end
+
+---Render one file row. The git status letter is pinned to the right edge
+---rather than leading the row, so the tree starts at column 0 and every level
+---of nesting spends its columns on the name instead of on a fixed prefix.
 ---@param comp  RenderComponent
 ---@param show_path boolean
 ---@param depth integer|nil
@@ -35,15 +85,17 @@ local function render_file(comp, show_path, depth, width)
   local file = comp.context
   local conf = config.get_config()
 
-  -- Fixed left region: status, tree indent, icon.
-  local left = { { file.status .. " ", hl.get_git_hl(file.status) } }
+  -- Fixed left region: tree indent, icon. The indent puts a file's icon
+  -- directly under its parent's folder icon (the dir row spends one column on
+  -- the fold chevron before its own icon).
+  local left = {}
   if depth then
     left[#left + 1] = { string.rep(" ", depth + 1) }
   end
   local icon, icon_hl = hl.get_file_icon(file.basename, file.extension)
   left[#left + 1] = { icon, icon_hl }
 
-  -- Pinned right region: conflict marker, comment badge, stats.
+  -- Pinned right region: conflict marker, comment badge, stats, status letter.
   local right = {}
 
   if file.kind == "conflicting" and not (file.stats and file.stats.conflicts) then
@@ -76,44 +128,19 @@ local function render_file(comp, show_path, depth, width)
     end
   end
 
-  local left_w, right_w = 0, 0
-  for _, c in ipairs(left) do left_w = left_w + vim.fn.strdisplaywidth(c[1]) end
-  for _, c in ipairs(right) do right_w = right_w + vim.fn.strdisplaywidth(c[1]) end
+  -- Last, so it sits in the final column of the row: the same place the tree
+  -- puts it, and the same column on every line whatever the stats are doing.
+  right[#right + 1] = { " " .. file.status, hl.get_git_hl(file.status) }
 
-  -- Flex middle: basename (+ parent path in list mode). Keep at least a
-  -- sliver of the name even when the row overflows.
+  -- Flex middle: basename (+ parent path in list mode).
   local flex = {
     { file.basename, file.active and "DiffviewFilePanelSelected" or "DiffviewFilePanelFileName" },
   }
   if show_path then
     flex[#flex + 1] = { " " .. file.parent_path, "DiffviewFilePanelPath" }
   end
-  local budget = math.max(width - left_w - right_w, 3)
 
-  for _, c in ipairs(left) do comp:add_text(c[1], c[2]) end
-
-  local used = 0
-  for _, c in ipairs(flex) do
-    local w = vim.fn.strdisplaywidth(c[1])
-    if used + w <= budget then
-      comp:add_text(c[1], c[2])
-      used = used + w
-    else
-      local text = truncate_text(c[1], budget - used)
-      if text ~= "" then
-        comp:add_text(text, c[2])
-        used = used + vim.fn.strdisplaywidth(text)
-      end
-      break
-    end
-  end
-
-  local pad = width - left_w - used - right_w
-  if pad > 0 then comp:add_text(string.rep(" ", pad)) end
-
-  for _, c in ipairs(right) do comp:add_text(c[1], c[2]) end
-
-  comp:ln()
+  render_row(comp, left, flex, right, width)
 end
 
 ---@param comp RenderComponent
@@ -162,22 +189,27 @@ local function render_file_tree_recurse(depth, comp, width)
   local items = comp.components[2]
   local ctx = comp.context --[[@as DirData ]]
 
-  dir:add_text(
-    get_dir_status_text(ctx, conf.file_panel.tree_options) .. " ",
-    hl.get_git_hl(ctx.status)
-  )
-  dir:add_text(string.rep(" ", depth))
-  dir:add_text(ctx.collapsed and conf.signs.fold_closed or conf.signs.fold_open, "DiffviewNonText")
+  -- Same shape as a file row: indent and fold chevron on the left, the status
+  -- letter pinned right, the name taking what is left. Flattened chains
+  -- ("lua/diffview/scene/views") are the longest text in the panel, so they
+  -- truncate and get the overflow float like any other row.
+  local left = {
+    { string.rep(" ", depth) },
+    { ctx.collapsed and conf.signs.fold_closed or conf.signs.fold_open, "DiffviewNonText" },
+  }
 
   if conf.use_icons then
-    dir:add_text(
+    left[#left + 1] = {
       " " .. (ctx.collapsed and conf.icons.folder_closed or conf.icons.folder_open) .. " ",
-      "DiffviewFolderSign"
-    )
+      "DiffviewFolderSign",
+    }
   end
 
-  dir:add_text(ctx.name, "DiffviewFolderName")
-  dir:ln()
+  local right = {
+    { " " .. get_dir_status_text(ctx, conf.file_panel.tree_options), hl.get_git_hl(ctx.status) },
+  }
+
+  render_row(dir, left, { { ctx.name, "DiffviewFolderName" } }, right, width)
 
   if not ctx.collapsed then
     for _, item in ipairs(items.components) do
