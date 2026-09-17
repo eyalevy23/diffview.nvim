@@ -450,6 +450,10 @@ M.hl_links = {
   FolderName = "Directory",
   FolderSign = "PreProc",
   Hash = "Identifier",
+  -- pick_commit's hash colours, after lazygit: on main / pushed / not pushed.
+  CommitMerged = "diffAdded",
+  CommitPushed = "DiagnosticWarn",
+  CommitUnpushed = "diffRemoved",
   Reference = "Function",
   ReflogSelector = "Special",
   StatusAdded = "diffAdded",

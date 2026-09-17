@@ -279,9 +279,9 @@ return function(panel)
   local width = panel:infer_width()
 
   -- infer_width() is the full window width, gutter included; the pinned
-  -- right region must fit inside the visible TEXT columns (the panel has
-  -- signcolumn="yes"), so subtract the decoration columns.
-  local text_width = width - 3
+  -- right region must fit inside the visible TEXT columns, so subtract the
+  -- decoration columns (none by default, but a user's win_opts may add some).
+  local text_width = width - 1
   if panel.winid and vim.api.nvim_win_is_valid(panel.winid) then
     text_width = vim.api.nvim_win_get_width(panel.winid)
       - vim.fn.getwininfo(panel.winid)[1].textoff - 1

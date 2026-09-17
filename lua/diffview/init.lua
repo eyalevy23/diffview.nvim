@@ -8,6 +8,7 @@ local lazy = require("diffview.lazy")
 local arg_parser = lazy.require("diffview.arg_parser") ---@module "diffview.arg_parser"
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
+local trunk = lazy.require("diffview.trunk") ---@module "diffview.trunk"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 local vcs = lazy.require("diffview.vcs") ---@module "diffview.vcs"
 
@@ -94,6 +95,17 @@ function M.init()
       M.emit("buf_write_post")
     end,
   })
+  au("FocusGained", {
+    group = M.augroup,
+    pattern = "*",
+    callback = function(_)
+      -- Pick up what changed while Neovim was in the background: edits from
+      -- another pane, a commit from the terminal. The index watcher only sees
+      -- the index, not the working tree. (Entering the tab refreshes already:
+      -- see the `tab_enter` listeners.)
+      M.emit("refresh_files")
+    end,
+  })
   au("WinClosed", {
     group = M.augroup,
     pattern = "*",
@@ -153,6 +165,27 @@ function M.open(args)
   local view = lib.diffview_open(args)
   if view then
     view:open()
+  end
+end
+
+---Open the branch diff: the working tree against its merge-base with the trunk
+---(see diffview.trunk), so the branch's commits and uncommitted edits show
+---together — a `main...HEAD` range stops at HEAD. Without a trunk: the
+---uncommitted changes, as a plain `:DiffviewOpen`.
+function M.open_branch()
+  trunk.merge_base(vim.uv.cwd(), function(sha)
+    M.open(sha and { sha } or {})
+  end)
+end
+
+---Open what a picker's `open` option names: `true` for the branch diff, else
+---rev args as for `:DiffviewOpen` (a string or a list).
+---@param open true|string|string[]
+function M.open_for_picker(open)
+  if open == true then
+    M.open_branch()
+  else
+    M.open(open)
   end
 end
 

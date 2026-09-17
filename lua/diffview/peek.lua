@@ -21,6 +21,7 @@ local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|Lazy
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local navigate = lazy.require("diffview.navigate") ---@module "diffview.navigate"
+local trunk = lazy.require("diffview.trunk") ---@module "diffview.trunk"
 local unified = lazy.require("diffview.scene.layouts.unified_render") ---@module "diffview.scene.layouts.unified_render"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 local vcs = lazy.require("diffview.vcs") ---@module "diffview.vcs"
@@ -327,38 +328,13 @@ local function branch_base(ctx, cb)
 
   local head = ctx.adapter:head_rev()
   local head_sha = head and head.commit
-  local candidates = vim.list_slice(config.get_config().peek.trunk)
 
-  local function merge_base(ref, on_done)
-    git(ctx, { "merge-base", ref, "HEAD" }, nil, function(code, out)
-      local sha = code == 0 and vim.trim(out) or ""
-      on_done(sha ~= "" and sha or nil)
-    end)
-  end
-
-  local function try(i)
-    local ref = candidates[i]
-    if not ref then
-      git(ctx, { "symbolic-ref", "--short", "refs/remotes/origin/HEAD" }, nil, function(code, out)
-        local remote = code == 0 and vim.trim(out) or nil
-        if not remote then return cb(nil) end
-        merge_base(remote, function(sha)
-          if sha and sha == head_sha then return cb(nil) end
-          cb(sha, remote, sha)
-        end)
-      end)
-      return
-    end
-    merge_base(ref, function(sha)
-      if sha and sha == head_sha then
-        -- On the trunk itself: nothing branch-specific to show.
-        return cb(nil)
-      end
-      if sha then return cb(sha, ref, sha) end
-      try(i + 1)
-    end)
-  end
-  try(1)
+  trunk.merge_base(ctx.toplevel, function(sha, ref)
+    -- HEAD is the merge-base when on the trunk and in sync with origin:
+    -- nothing branch-specific to show.
+    if not sha or sha == head_sha then return cb(nil) end
+    cb(sha, ref, sha)
+  end)
 end
 
 ---@param ctx PeekCtx

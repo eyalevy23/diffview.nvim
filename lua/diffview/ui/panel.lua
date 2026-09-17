@@ -43,7 +43,10 @@ Panel.winopts = {
   foldenable = false,
   spell = false,
   wrap = false,
-  signcolumn = "yes",
+  -- Nothing places signs in a panel, and a reserved column misaligns the rows:
+  -- they start after it, while the `~` filler past the last row is drawn at
+  -- column 0.
+  signcolumn = "no",
   colorcolumn = "",
   foldmethod = "manual",
   foldcolumn = "0",

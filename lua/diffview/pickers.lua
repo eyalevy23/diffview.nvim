@@ -7,6 +7,8 @@
 --   pick_line()  — fuzzy-find across every added/deleted line of the whole
 --                  view ("where did the agent touch `retry_policy`?"), landing
 --                  on the exact rendered row in the unified diff.
+--   pick_commit() — fuzzy-find a commit (or mark several for a range) and open
+--                  it, rows coloured the way lazygit colours its commit list.
 --
 -- Telescope when available (fzf-native if the user loaded it); vim.ui.select
 -- otherwise so both work in a bare config. Loaded lazily from actions so
@@ -17,8 +19,10 @@ local lazy = require("diffview.lazy")
 local DiffView = lazy.access("diffview.scene.views.diff.diff_view", "DiffView") ---@type DiffView|LazyModule
 local FileHistoryView = lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
+local config = lazy.require("diffview.config") ---@module "diffview.config"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local navigate = lazy.require("diffview.navigate") ---@module "diffview.navigate"
+local trunk = lazy.require("diffview.trunk") ---@module "diffview.trunk"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
 local api = vim.api
@@ -29,8 +33,9 @@ local M = {}
 --#region view helpers
 
 ---The view to pick in. With `opts.open`, opens a diffview first (and retries
----the picker once it is ready) so a global keymap can be a one-liner.
----@param opts? { open?: string|string[] }
+---the picker once it is ready) so a global keymap can be a one-liner: `true`
+---opens the branch diff, a string or list are rev args as for :DiffviewOpen.
+---@param opts? { open?: true|string|string[] }
 ---@param retry fun()
 ---@return DiffView|FileHistoryView?
 local function current_view(opts, retry)
@@ -44,8 +49,7 @@ local function current_view(opts, retry)
     return
   end
 
-  local args = type(opts.open) == "table" and opts.open or { opts.open }
-  require("diffview").open(args --[[@as string[] ]])
+  require("diffview").open_for_picker(opts.open)
 
   local tries = 0
   local function poll()
@@ -307,11 +311,212 @@ end
 
 --#endregion
 
+--#region commit list
+
+-- `%H` rather than `%h`: the status sets below come from rev-list, which prints
+-- full hashes. No pathspec: `-- .` made git diff every commit's tree (2-4x
+-- slower) and history simplification hid merge commits lazygit shows.
+local LOG_ARGS = { "log", "--topo-order", "--no-show-signature", "--format=%H%x09%aN%x09%s" }
+
+---@param args string[]
+---@return string[]
+local function git_cmd(args)
+  return utils.vec_join(config.get_config().git_cmd, args)
+end
+
+---@param line string
+---@return string? hash, string author, string subject
+local function parse_commit(line)
+  return line:match("^(%x+)\t([^\t]*)\t(.*)$")
+end
+
+---Hash sets of the commits not on main, and of those not pushed either, from
+---two parallel `git rev-list`s. A set is nil when git failed.
+---
+---"On main" means on the remote trunk only (trunk.remote_refs, as lazygit's
+---main branches): a local main with unpushed commits must not turn them green.
+-----ignore-missing skips whichever ref doesn't exist.
+---@param cwd string
+---@param cb fun(unmerged?: table<string, true>, unpushed?: table<string, true>)
+local function load_commit_status(cwd, cb)
+  local sets, pending = {}, 2
+  local function run(key, exclude, fallback)
+    local cmd = git_cmd(utils.vec_join("rev-list", "--ignore-missing", "HEAD", "--not", exclude, trunk.remote_refs))
+    vim.system(cmd, { cwd = cwd, text = true }, function(out)
+      if out.code ~= 0 and fallback then return run(key, fallback) end
+      if out.code == 0 then
+        local set = {}
+        for hash in out.stdout:gmatch("%x+") do set[hash] = true end
+        sets[key] = set
+      end
+      pending = pending - 1
+      if pending == 0 then
+        vim.schedule(function() cb(sets.unmerged, sets.unpushed) end)
+      end
+    end)
+  end
+  run("unmerged", {})
+  -- Pushed = on the upstream, as lazygit has it. `@{upstream}` is fatal when
+  -- unset (a branch never pushed, detached HEAD) even with --ignore-missing;
+  -- then fall back to "on any remote", so a new branch's base commits aren't
+  -- red when they are already out there. lazygit shows those all yellow.
+  run("unpushed", { "@{upstream}" }, { "--remotes" })
+end
+
+local bit = require("bit")
+
+-- MD5 per its RFC, only to reproduce lazygit's author colours, which are
+-- derived from an MD5 of the author name.
+local md5_k = {}
+for i = 0, 63 do md5_k[i] = bit.tobit(math.floor(math.abs(math.sin(i + 1)) * 2 ^ 32)) end
+local md5_s = {
+  7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+  5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+}
+
+---First three MD5 state words of `str`: digest bytes 0-11, little-endian.
+---@param str string
+---@return integer, integer, integer
+local function md5_words(str)
+  local band, bor, bxor, bnot = bit.band, bit.bor, bit.bxor, bit.bnot
+  local lshift, rshift, rol, tobit = bit.lshift, bit.rshift, bit.rol, bit.tobit
+
+  local len = #str
+  local bits = len * 8
+  local msg = str .. "\128" .. ("\0"):rep((55 - len) % 64) .. string.char(
+    band(bits, 0xff), band(rshift(bits, 8), 0xff), band(rshift(bits, 16), 0xff), band(rshift(bits, 24), 0xff),
+    0, 0, 0, 0
+  )
+
+  local a0, b0, c0, d0 = tobit(0x67452301), tobit(0xefcdab89), tobit(0x98badcfe), tobit(0x10325476)
+  local m = {}
+  for chunk = 1, #msg, 64 do
+    for j = 0, 15 do
+      local p = chunk + j * 4
+      local w1, w2, w3, w4 = msg:byte(p, p + 3)
+      m[j] = bor(w1, lshift(w2, 8), lshift(w3, 16), lshift(w4, 24))
+    end
+    local a, b, c, d = a0, b0, c0, d0
+    for i = 0, 63 do
+      local f, g
+      if i < 16 then
+        f, g = bor(band(b, c), band(bnot(b), d)), i
+      elseif i < 32 then
+        f, g = bor(band(d, b), band(bnot(d), c)), (5 * i + 1) % 16
+      elseif i < 48 then
+        f, g = bxor(b, c, d), (3 * i + 5) % 16
+      else
+        f, g = bxor(c, bor(b, bnot(d))), (7 * i) % 16
+      end
+      a, d, c, b = d, c, b, tobit(b + rol(tobit(f + a + md5_k[i] + m[g]), md5_s[i + 1]))
+    end
+    a0, b0, c0, d0 = tobit(a0 + a), tobit(b0 + b), tobit(c0 + c), tobit(d0 + d)
+  end
+  return a0, b0, c0
+end
+
+---lazygit's randFloat: the word's four bytes summed mod 100, as a fraction.
+---@param word integer
+---@return number
+local function rand_float(word)
+  local sum = 0
+  for k = 0, 3 do sum = (sum + bit.band(bit.rshift(word, 8 * k), 0xff)) % 100 end
+  return sum / 100
+end
+
+---go-colorful's Hsl, truncated to 8-bit channels the way lazygit does.
+---@return string
+local function hsl_to_hex(h, s, l)
+  local t1 = l < 0.5 and l * (1 + s) or l + s - l * s
+  local t2 = 2 * l - t1
+  h = h / 360
+  local function channel(t)
+    if t < 0 then t = t + 1 end
+    if t > 1 then t = t - 1 end
+    local v
+    if 6 * t < 1 then
+      v = t2 + (t1 - t2) * 6 * t
+    elseif 2 * t < 1 then
+      v = t1
+    elseif 3 * t < 2 then
+      v = t2 + (t1 - t2) * (2 / 3 - t) * 6
+    else
+      v = t2
+    end
+    return math.floor(v * 255)
+  end
+  return ("#%02x%02x%02x"):format(channel(h + 1 / 3), channel(h), channel(h - 1 / 3))
+end
+
+---lazygit's initials: a wide first character (CJK) alone, the first two
+---characters of a one-word name, else the first letter of the first two words.
+---@param name string
+---@return string
+local function author_initials(name)
+  if name == "" then return "" end
+  local first = vim.fn.strcharpart(name, 0, 1)
+  if api.nvim_strwidth(first) > 1 then return first end
+  local words = vim.split(name, " ", { plain = true })
+  if #words == 1 then return vim.fn.strcharpart(name, 0, 2) end
+  return vim.fn.strcharpart(words[1], 0, 1) .. vim.fn.strcharpart(words[2], 0, 1)
+end
+
+---@class diffview.CommitAuthor
+---@field initials string
+---@field color string
+---@field hl string
+
+local authors = {} ---@type table<string, diffview.CommitAuthor>
+
+---@param name string
+---@return diffview.CommitAuthor
+local function author_of(name)
+  local author = authors[name]
+  if not author then
+    local w0, w1, w2 = md5_words(name)
+    local color = hsl_to_hex(rand_float(w0) * 360, 0.6 + 0.4 * rand_float(w1), 0.4 + 0.2 * rand_float(w2))
+    author = { initials = author_initials(name), color = color, hl = "DiffviewCommitAuthor" .. color:sub(2) }
+    authors[name] = author
+  end
+  return author
+end
+
+---Open one commit, or the range spanning several.
+---@param cwd string
+---@param hashes string[] Newest first.
+local function open_commits(cwd, hashes)
+  if #hashes == 1 then
+    require("diffview").open({ hashes[1] .. "^!" })
+    return
+  end
+
+  local function git(args)
+    local out = vim.system(git_cmd(args), { cwd = cwd, text = true }):wait()
+    return out.code == 0 and vim.split(out.stdout, "\n", { trimempty = true }) or {}
+  end
+
+  -- `A..B` excludes A's own changes, so diff from the oldest marked commit's
+  -- PARENT — otherwise it silently drops out and marking N commits only ever
+  -- shows N-1.
+  local base = git({ "rev-parse", "--quiet", "--verify", hashes[#hashes] .. "^" })[1]
+  if not base then
+    -- Root commit has no parent: diff against the empty tree. Asking git for
+    -- it keeps this correct in sha256 repos too.
+    base = git({ "hash-object", "-t", "tree", "/dev/null" })[1]
+  end
+  require("diffview").open({ base .. ".." .. hashes[1] })
+end
+
+--#endregion
+
 --#region pickers
 
 ---Fuzzy-find a file of the current view and open it.
----@param opts? { open?: string|string[] } With no diffview open, open one with
----this rev arg first (e.g. "main...HEAD") and pick once it's ready.
+---@param opts? { open?: true|string|string[] } With no diffview open, open one
+---first — `true` for the branch diff, else rev args like "main...HEAD" — and
+---pick once it's ready.
 function M.pick_file(opts)
   local view = current_view(opts, function() M.pick_file() end)
   if not view then return end
@@ -382,7 +587,7 @@ end
 
 ---Fuzzy-find across every added / deleted line of the current diff and jump
 ---to it. Deleted lines land on their `-` row in the unified buffer.
----@param opts? { open?: string|string[] } See pick_file.
+---@param opts? { open?: true|string|string[] } See pick_file.
 function M.pick_line(opts)
   local view = current_view(opts, function() M.pick_line() end)
   if not view then return end
@@ -502,6 +707,145 @@ function M.pick_line(opts)
       end,
     }):find()
   end)
+end
+
+---Fuzzy-find a commit and open it in a view. Mark commits with <Tab> (or mark
+---one and <CR> on another) to diff the range they span.
+---
+---Rows read like lazygit's commit list: the hash is green when the commit is
+---on main, yellow when pushed but not on main, red when not pushed; then the
+---author's initials in lazygit's colour for that author. The log streams in as
+---before; the status comes from two small rev-lists started alongside it.
+function M.pick_commit()
+  local cwd = vim.fs.root(vim.uv.cwd(), ".git")
+  if not cwd then
+    utils.err("[diffview] Not inside a git repository.")
+    return
+  end
+
+  local has_telescope, pickers = pcall(require, "telescope.pickers")
+  if not has_telescope then
+    vim.system(git_cmd(LOG_ARGS), { cwd = cwd, text = true }, vim.schedule_wrap(function(out)
+      local commits = {}
+      for _, line in ipairs(vim.split(out.stdout or "", "\n", { trimempty = true })) do
+        local hash, _, subject = parse_commit(line)
+        if hash then commits[#commits + 1] = { hash = hash, subject = subject } end
+      end
+      vim.ui.select(commits, {
+        prompt = "Commits",
+        format_item = function(c) return c.hash:sub(1, 8) .. " " .. c.subject end,
+      }, function(choice)
+        if choice then open_commits(cwd, { choice.hash }) end
+      end)
+    end))
+    return
+  end
+
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local previewers = require("telescope.previewers")
+  local t_actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+  local entry_display = require("telescope.pickers.entry_display")
+
+  local picker
+  local status = { loaded = false } ---@type { loaded: boolean, unmerged?: table<string, true>, unpushed?: table<string, true> }
+  local drawn_early = false
+  -- Author groups are set once per pick: a colorscheme change clears them.
+  local author_hl_set = {} ---@type table<string, true>
+
+  -- Started before the picker so the sets usually land before the first row.
+  -- When they don't, the rows already drawn are redrawn with their colours.
+  load_commit_status(cwd, function(unmerged, unpushed)
+    status.loaded, status.unmerged, status.unpushed = true, unmerged, unpushed
+    local bufnr = picker and picker.results_bufnr
+    if not (drawn_early and picker.manager and bufnr and api.nvim_buf_is_valid(bufnr)) then return end
+    for index = 1, math.min(picker.manager:num_results(), picker.max_results) do
+      local entry = picker.manager:get_entry(index)
+      if entry then picker:entry_adder(index, entry, nil, false) end
+    end
+    picker:set_selection(picker:get_selection_row())
+  end)
+
+  ---@param hash string
+  ---@return string
+  local function hash_hl(hash)
+    if not status.loaded then
+      drawn_early = true
+      return "TelescopeResultsIdentifier"
+    end
+    if not (status.unmerged and status.unpushed) then return "TelescopeResultsIdentifier" end
+    if not status.unmerged[hash] then return "DiffviewCommitMerged" end
+    return status.unpushed[hash] and "DiffviewCommitUnpushed" or "DiffviewCommitPushed"
+  end
+
+  local displayer = entry_display.create({
+    separator = " ",
+    items = { { width = 8 }, { width = 2 }, { remaining = true } },
+  })
+
+  local function display(entry)
+    local author = author_of(entry.author)
+    if not author_hl_set[author.hl] then
+      api.nvim_set_hl(0, author.hl, { fg = author.color })
+      author_hl_set[author.hl] = true
+    end
+    return displayer({
+      { entry.value:sub(1, 8), hash_hl(entry.value) },
+      { author.initials, author.hl },
+      entry.msg,
+    })
+  end
+
+  local preview_opts = { cwd = cwd }
+
+  picker = pickers.new({}, {
+    prompt_title = "Git Commits",
+    finder = finders.new_oneshot_job(git_cmd(LOG_ARGS), {
+      cwd = cwd,
+      entry_maker = function(line)
+        local hash, author, subject = parse_commit(line)
+        if not hash then return end
+        if subject == "" then subject = "<empty commit message>" end
+        return {
+          value = hash,
+          -- The short hash only: 40 hex chars would let fuzzy queries match
+          -- inside hashes.
+          ordinal = hash:sub(1, 8) .. " " .. subject,
+          msg = subject,
+          author = author,
+          display = display,
+        }
+      end,
+    }),
+    sorter = conf.file_sorter({}),
+    previewer = {
+      previewers.git_commit_diff_to_parent.new(preview_opts),
+      previewers.git_commit_diff_to_head.new(preview_opts),
+      previewers.git_commit_diff_as_was.new(preview_opts),
+      previewers.git_commit_message.new(preview_opts),
+    },
+    attach_mappings = function(prompt_bufnr)
+      t_actions.select_default:replace(function()
+        local hovered = action_state.get_selected_entry()
+        local marked = vim.list_extend({}, action_state.get_current_picker(prompt_bufnr):get_multi_selection())
+        -- Marking one commit with <Tab> and pressing <CR> on another means
+        -- "diff these two" — count the hovered one in.
+        if #marked <= 1 and hovered and not (marked[1] and marked[1].value == hovered.value) then
+          marked[#marked + 1] = hovered
+        end
+        t_actions.close(prompt_bufnr)
+        if #marked == 0 then return end
+        -- Newest first by list position: the log is --topo-order, so a commit
+        -- always sits above its ancestors. Commit dates can't order them — a
+        -- rebase stamps every rebased commit with the same second.
+        table.sort(marked, function(a, b) return a.index < b.index end)
+        open_commits(cwd, vim.tbl_map(function(entry) return entry.value end, marked))
+      end)
+      return true
+    end,
+  })
+  picker:find()
 end
 
 --#endregion

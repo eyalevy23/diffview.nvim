@@ -161,6 +161,17 @@ COMMANDS                                        *diffview-commands*
                         file. If the path doesn't match any of the files in
                         the initial set of files, this option does nothing.
 
+                                                *:DiffviewBranch*
+:DiffviewBranch
+        Diff the working tree against its merge-base with the trunk: the
+        branch's commits and the uncommitted edits in one view (an
+        `origin/main...HEAD` range stops at HEAD). The trunk is `origin/main`,
+        else `origin/master`, else a local `main` / `master` when the repo has
+        no remote. Without a trunk this is a plain |:DiffviewOpen|.
+
+        Lua: `require("diffview").open_branch()`. The pickers take
+        `{ open = true }` to open this view first when none is open.
+
                                                 *:DiffviewFileHistory*
 :[range]DiffviewFileHistory [paths] [options]
 
@@ -1599,9 +1610,9 @@ dual `old# new# ±` gutter — against a "base":
         `branch`    What this branch changed: vs the left side of an open
                   diff view of the working tree for this repo (so jumping
                   to the real file with `T` and peeking shows the very same
-                  change), else vs the merge-base of HEAD with the first of
-                  `peek.trunk` that exists, else with `origin/HEAD`. Skipped
-                  while on the trunk itself.
+                  change), else vs the merge-base of HEAD with the trunk
+                  (see |:DiffviewBranch|). Skipped when HEAD is that
+                  merge-base (on the trunk, nothing unpushed).
         `blame`     The commit that last touched the line and what it
                   replaced. The title carries sha, author and age; the
                   subject sits above the hunk. Renames are followed.
@@ -1635,7 +1646,6 @@ Lua API: >lua
 <
 Config: >lua
         peek = {
-          trunk = { "main", "master" }, -- refs tried for the branch base
           max_height = 0.6,             -- fraction of the editor height
           blame_deleted = true,         -- author labels on deleted lines
         },

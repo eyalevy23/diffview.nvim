@@ -117,13 +117,32 @@ uncommitted changes, the branch), for diffs too big to page through:
 | `<leader>gf` | Fuzzy-find a file of the view; the preview is its patch |
 | `<leader>g/` | Fuzzy-find across every added / deleted line of the diff; lands on that exact row, deleted lines included |
 
-From outside a view, pass `{ open = <rev arg> }` to open one first:
+From outside a view, pass `{ open = true }` to open the branch diff first
+(`:DiffviewBranch`, below), or `{ open = <rev arg> }` for a specific one:
 
 ```lua
 vim.keymap.set("n", "<leader>g/", function()
-  require("diffview.pickers").pick_line({ open = "main...HEAD" })
+  require("diffview.pickers").pick_line({ open = true })
 end)
 ```
+
+`require("diffview.pickers").pick_commit()` picks a commit to open instead:
+`<CR>` opens it, `<Tab>`-marking several (or one, then `<CR>` on another)
+opens the range they span. Rows read like lazygit's commit list — the hash is
+green on `main`/`master`, yellow when pushed, red when not pushed, followed by
+the author's initials in lazygit's colour for that author.
+
+### The branch diff (`:DiffviewBranch`)
+
+`:DiffviewBranch` diffs the working tree against its merge-base with the trunk,
+so the branch's commits and your uncommitted edits show in one view (an
+`origin/main...HEAD` range stops at HEAD and leaves the edits out). The trunk is
+`origin/main`, else `origin/master`, else a local `main`/`master` in a repo with
+no remote — the origin copy first, because a local `main` is often stale. Peek's
+`branch` base and `pick_commit`'s colours use the same trunk.
+
+An open view refreshes when you enter its tab and when Neovim regains focus, so
+edits from another pane or a commit from the terminal show up.
 
 ### Peek: what was here before? (`:DiffviewPeek`)
 
@@ -134,7 +153,7 @@ as the view (word diff, Treesitter, dual gutter) — against one of three bases:
 | Base | Shows |
 |------|-------|
 | `index` | what your uncommitted edit replaced |
-| `branch` | what this branch changed vs its merge-base with `main`/`master` — or vs the base of an open diff view for the repo, so `T` into the real file and peek shows the same change |
+| `branch` | what this branch changed vs its merge-base with the trunk (`origin/main`, see `:DiffviewBranch`) — or vs the base of an open diff view for the repo, so `T` into the real file and peek shows the same change |
 | `blame` | the commit that last touched the line and what it replaced: sha, author, age, subject |
 
 With no argument the base is picked for you: an open diff view's base, else
@@ -163,7 +182,7 @@ vim.keymap.set("n", "<leader>gp", function()
 end, { desc = "Peek: what was here before" })
 ```
 
-Config (defaults): `peek = { trunk = { "main", "master" }, max_height = 0.6, blame_deleted = true }`.
+Config (defaults): `peek = { max_height = 0.6, blame_deleted = true }`.
 
 ### For contributors
 

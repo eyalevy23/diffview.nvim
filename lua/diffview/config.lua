@@ -65,9 +65,6 @@ M.defaults = {
     max_card_height = 16,
   },
   peek = {
-    -- Refs tried in order for the branch base (merge-base with HEAD); falls
-    -- back to origin/HEAD. An open diff view of the working tree wins.
-    trunk = { "main", "master" },
     -- Tallest float, as a fraction of the editor height.
     max_height = 0.6,
     -- Right-aligned "author · when" labels on deleted lines (who wrote what

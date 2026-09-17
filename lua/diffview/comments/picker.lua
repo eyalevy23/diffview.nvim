@@ -75,9 +75,10 @@ end
 ---Pick a comment thread across every file of the review and jump to it. Open
 ---threads sort first — this exists because finding one card in a 60-file diff
 ---by paging through entries doesn't scale.
----@param opts? { open?: string } With no diffview open, open one with this
----rev arg first (e.g. "main...HEAD") and pick once it's ready, instead of
----erroring. Lets a global keymap be a one-liner.
+---@param opts? { open?: true|string|string[] } With no diffview open, open
+---one first — `true` for the branch diff, else rev args like "main...HEAD" —
+---and pick once it's ready, instead of erroring. Lets a global keymap be a
+---one-liner.
 function M.pick(opts)
   local view = lib.get_current_view()
   local adapter = view and view.adapter
@@ -86,7 +87,7 @@ function M.pick(opts)
       utils.err("[diffview] Open a diffview first.")
       return
     end
-    require("diffview").open(opts.open)
+    require("diffview").open_for_picker(opts.open)
     local tries = 0
     local function retry()
       if lib.get_current_view() then
