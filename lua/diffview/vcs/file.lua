@@ -4,6 +4,7 @@ local oop = require("diffview.oop")
 
 local GitRev = lazy.access("diffview.vcs.adapters.git.rev", "GitRev") ---@type GitRev|LazyModule
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
+local Signal = lazy.access("diffview.control", "Signal") ---@type Signal|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
@@ -217,7 +218,7 @@ File.create_buffer = async.wrap(function(self, callback)
     return
   end
 
-  if self.binary == nil and not config.get_config().diff_binaries then
+  if self.binary == nil and not self.nulled and not config.get_config().diff_binaries then
     self.binary = self.adapter:is_binary(self.path, self.rev)
   end
 
@@ -257,14 +258,26 @@ File.create_buffer = async.wrap(function(self, callback)
   self.bufnr = api.nvim_create_buf(false, false)
   api.nvim_buf_set_name(self.bufnr, fullname)
 
-  local err, lines = await(self:produce_data())
-  if err then error(table.concat(err, "\n")) end
+  -- From here the buffer is valid but still empty until `produce_data()`
+  -- returns: a concurrent open of the same entry waits on this signal
+  -- instead of reading it (see Diff1Unified.open_files).
+  local loaded = Signal()
+  self.loaded = loaded
+  local function mark_loaded()
+    self.loaded = nil
+    loaded:send()
+  end
+
+  local ok, err, lines = async.pawait(self.produce_data, self)
+  if not ok then mark_loaded(); error(err) end
+  if err then mark_loaded(); error(table.concat(err, "\n")) end
 
   await(async.scheduler())
 
   -- Revalidate buffer in case the file was destroyed before `produce_data()`
   -- returned.
   if not api.nvim_buf_is_valid(self.bufnr) then
+    mark_loaded()
     error("The buffer has been invalidated!")
     return
   end
@@ -302,6 +315,7 @@ File.create_buffer = async.wrap(function(self, callback)
   vim.bo[self.bufnr].modifiable = last_modifiable
   vim.bo[self.bufnr].modified = last_modified
   self:post_buf_created()
+  mark_loaded()
   callback(self.bufnr)
   ---@diagnostic enable: invisible
 end)

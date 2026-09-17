@@ -18,6 +18,7 @@ local lazy = require("diffview.lazy")
 
 local DiffView = lazy.access("diffview.scene.views.diff.diff_view", "DiffView") ---@type DiffView|LazyModule
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
+local authors = lazy.require("diffview.authors") ---@module "diffview.authors"
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local navigate = lazy.require("diffview.navigate") ---@module "diffview.navigate"
@@ -326,14 +327,14 @@ local function branch_base(ctx, cb)
     end
   end
 
-  local head = ctx.adapter:head_rev()
-  local head_sha = head and head.commit
-
-  trunk.merge_base(ctx.toplevel, function(sha, ref)
-    -- HEAD is the merge-base when on the trunk and in sync with origin:
-    -- nothing branch-specific to show.
-    if not sha or sha == head_sha then return cb(nil) end
-    cb(sha, ref, sha)
+  git(ctx, { "rev-parse", "HEAD" }, nil, function(code, out)
+    local head_sha = code == 0 and vim.trim(out) or nil
+    trunk.merge_base(ctx.toplevel, function(sha, ref)
+      -- HEAD is the merge-base when on the trunk and in sync with origin:
+      -- nothing branch-specific to show.
+      if not sha or sha == head_sha then return cb(nil) end
+      cb(sha, ref, sha)
+    end)
   end)
 end
 
@@ -536,23 +537,46 @@ local function fit(s, width)
   return vim.fn.strcharpart(s, 0, math.max(0, width - 1)) .. "…"
 end
 
+---`fit` for a title of [text, hl] chunks: cut at the chunk that overflows.
+---@param chunks { [1]: string, [2]: string }[]
+---@param width integer
+---@return { [1]: string, [2]: string }[]
+local function fit_chunks(chunks, width)
+  local ret, used = {}, 0
+  for _, chunk in ipairs(chunks) do
+    local w = vim.fn.strdisplaywidth(chunk[1])
+    if used + w > width then
+      if width - used > 0 then ret[#ret + 1] = { fit(chunk[1], width - used), chunk[2] } end
+      break
+    end
+    ret[#ret + 1] = chunk
+    used = used + w
+  end
+  return ret
+end
+
+---The float title as [text, hl] chunks; in blame mode the author in their
+---lazygit colour, as in pick_commit.
 ---@param step PeekStep
 ---@param idx integer
 ---@param n integer
----@return string
+---@return { [1]: string, [2]: string }[]
 local function title_for(step, idx, n)
-  local head
-  if step.mode == "blame" then
-    local c = step.commit
-    head = ("%s · %s · %s"):format(
-      short(c.sha), c.author or "?", c.time and reltime(c.time) or "?")
-    if c.filename ~= state.ctx.path then
-      head = head .. " · " .. c.filename
-    end
-  else
-    head = step.label
+  local hunk = (" · hunk %d/%d "):format(idx, n)
+  if step.mode ~= "blame" then
+    return { { " " .. step.label .. hunk, "DiffviewPeekTitle" } }
   end
-  return (" %s · hunk %d/%d "):format(head, idx, n)
+
+  local c = step.commit
+  local tail = " · " .. (c.time and reltime(c.time) or "?")
+  if c.filename ~= state.ctx.path then
+    tail = tail .. " · " .. c.filename
+  end
+  return {
+    { (" %s · "):format(short(c.sha)), "DiffviewPeekTitle" },
+    { c.author or "?", c.author and authors.get(c.author).hl or "DiffviewPeekTitle" },
+    { tail .. hunk, "DiffviewPeekTitle" },
+  }
 end
 
 ---@param step PeekStep
@@ -763,7 +787,9 @@ local function render(step)
   state.content_width = content + gutter
   local title = title_for(step, b.idx, #st.visible_ranges)
   local footer = footer_for(step)
-  local width = math.max(content + gutter + 1, vim.fn.strdisplaywidth(title) + 2, 40)
+  local title_width = 0
+  for _, chunk in ipairs(title) do title_width = title_width + vim.fn.strdisplaywidth(chunk[1]) end
+  local width = math.max(content + gutter + 1, title_width + 2, 40)
   width = math.min(width, vim.o.columns - 4)
   local height = math.min(#lines + header_rows, math.max(3, math.floor(vim.o.lines * conf.max_height)))
 
@@ -773,7 +799,7 @@ local function render(step)
   cfg.col = math.max(0, math.min(cfg.col, vim.o.columns - width - 2))
   cfg.style = "minimal"
   cfg.border = "rounded"
-  cfg.title = fit(title, width - 2)
+  cfg.title = fit_chunks(title, width - 2)
   cfg.title_pos = "left"
   cfg.zindex = 60
   if vim.fn.has("nvim-0.10") == 1 then

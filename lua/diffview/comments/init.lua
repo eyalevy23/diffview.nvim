@@ -58,19 +58,56 @@ function M.get_doc(path)
   return M.docs[path]
 end
 
----All open threads for a repo-relative file path (panel badge). Loads the
----review file on demand so the badge is right on the panel's FIRST paint,
----before any diff buffer has attached.
+---@class ReviewIndex
+---@field open table<string, integer> Open threads per repo-relative path.
+---@field awaiting table<string, integer> Threads awaiting you per path.
+---@field n_open integer
+---@field n_awaiting integer
+---@field summary? string
+
+-- Keyed by document identity: a cached doc is never mutated — every load and
+-- write swaps in a fresh table, which is what invalidates an entry.
+---@type table<ReviewDoc, ReviewIndex>
+local index_cache = setmetatable({}, { __mode = "k" })
+
+---@param doc ReviewDoc
+---@return ReviewIndex
+local function index_of(doc)
+  local index = index_cache[doc]
+  if index then return index end
+
+  index = { open = {}, awaiting = {}, n_open = 0, n_awaiting = 0, summary = doc.review.summary }
+  for _, t in ipairs(doc.threads) do
+    if t.status == "open" then
+      local path = t.anchor.path
+      index.open[path] = (index.open[path] or 0) + 1
+      index.n_open = index.n_open + 1
+      if store.awaiting_human(t) then
+        index.awaiting[path] = (index.awaiting[path] or 0) + 1
+        index.n_awaiting = index.n_awaiting + 1
+      end
+    end
+  end
+
+  index_cache[doc] = index
+  return index
+end
+
+---Thread counts of a review (panel badge + header, awaiting-you motions),
+---computed once per document. Loads the review file on demand so the badge
+---is right on the panel's FIRST paint, before any diff buffer has attached.
+---@param adapter VCSAdapter
+---@return ReviewIndex
+function M.index_for(adapter)
+  return index_of(M.get_doc(store.path_for(adapter)))
+end
+
+---All open threads for a repo-relative file path.
 ---@param adapter VCSAdapter
 ---@param file_path string
 ---@return integer open_count
 function M.count_for(adapter, file_path)
-  local doc = M.get_doc(store.path_for(adapter))
-  local n = 0
-  for _, t in ipairs(doc.threads) do
-    if t.anchor.path == file_path and t.status == "open" then n = n + 1 end
-  end
-  return n
+  return M.index_for(adapter).open[file_path] or 0
 end
 
 ---Write through the store, stamping any threads we observed as outdated, then
@@ -158,6 +195,18 @@ end
 -- user-facing API.
 M.place_threads = place_threads
 
+---Sorted rows of the threads awaiting your reply in a unified diff buffer.
+---@param bufnr integer
+---@return integer[]
+function M.awaiting_rows(bufnr)
+  local rows = {}
+  for _, p in ipairs(place_threads(bufnr)) do
+    if store.awaiting_human(p.thread) then rows[#rows + 1] = p.row end
+  end
+  table.sort(rows)
+  return rows
+end
+
 ---Re-render the threads of one unified buffer.
 ---@param bufnr integer
 function M.refresh_buf(bufnr)
@@ -202,6 +251,51 @@ function M.refresh_all(store_path)
   if float then float.refresh(M.docs) end
 end
 
+---The echo for an external write: the files whose threads changed, then where
+---the review stands. Paths shorten to basenames, then to a count, so the line
+---never outgrows the command line (a hit-enter prompt per AI write).
+---@param prev? ReviewDoc
+---@param doc ReviewDoc
+---@param index ReviewIndex
+---@return string
+local function update_message(prev, doc, index)
+  local old = {}
+  for _, t in ipairs(prev and prev.threads or {}) do old[t.id] = t end
+
+  local paths, seen = {}, {}
+  for _, t in ipairs(doc.threads) do
+    local o = old[t.id]
+    if not o or o.updated_at ~= t.updated_at or o.status ~= t.status or #o.comments ~= #t.comments then
+      if not seen[t.anchor.path] then
+        seen[t.anchor.path] = true
+        paths[#paths + 1] = t.anchor.path
+      end
+    end
+  end
+
+  local counts = (" · %d awaiting you · %d open"):format(index.n_awaiting, index.n_open)
+  local suffixes = { "" }
+  if (prev and prev.review.summary) ~= doc.review.summary then
+    table.insert(suffixes, 1, " · new summary")
+  end
+
+  local names = #paths > 0 and {
+    ": " .. table.concat(paths, ", "),
+    ": " .. table.concat(vim.tbl_map(vim.fs.basename, paths), ", "),
+    (": %d file(s)"):format(#paths),
+  } or {}
+  names[#names + 1] = ""
+
+  local msg
+  for _, n in ipairs(names) do
+    for _, suffix in ipairs(suffixes) do
+      msg = "[diffview] review updated" .. n .. counts .. suffix
+      if vim.fn.strdisplaywidth(msg) <= vim.v.echospace then return msg end
+    end
+  end
+  return vim.fn.strcharpart(msg, 0, math.max(vim.v.echospace, 1))
+end
+
 ---Start watching the review file for external (AI) writes.
 ---@param ctx CommentBufCtx
 local function ensure_watcher(ctx)
@@ -226,6 +320,7 @@ local function ensure_watcher(ctx)
       pending = false
       if store.is_own_write(path) then return end
 
+      local prev = M.docs[path]
       local doc, warn = store.load(path)
       M.docs[path] = doc
       if warn then utils.warn("[diffview] " .. warn) end
@@ -233,11 +328,7 @@ local function ensure_watcher(ctx)
       M.refresh_all(path)
 
       if lib.get_current_view() then
-        local open = 0
-        for _, t in ipairs(doc.threads) do
-          if t.status == "open" then open = open + 1 end
-        end
-        api.nvim_echo({ { ("[diffview] review updated externally (%d open thread(s))"):format(open) } }, false, {})
+        api.nvim_echo({ { update_message(prev, doc, index_of(doc)) } }, false, {})
       end
     end, 200)
   end)
@@ -701,7 +792,7 @@ end
 ---Pick a comment thread across every file of the review and jump to it.
 ---Implemented in comments/picker.lua (required lazily — Telescope and the
 ---previewer never load until the first pick).
----@param opts? { open?: string } See picker.pick.
+---@param opts? { open?: string, awaiting?: boolean } See picker.pick.
 function M.comment_pick(opts)
   return require("diffview.comments.picker").pick(opts)
 end
@@ -759,6 +850,8 @@ local function cmd_review(cmd_opts)
     utils.info("[diffview] Review reloaded from disk.")
   elseif sub == "pick" then
     M.comment_pick()
+  elseif sub == "awaiting" then
+    M.comment_pick({ awaiting = true })
   elseif sub == "clear" then
     M.update(path, function(doc) doc.threads = {} end)
     utils.info("[diffview] Review cleared.")
@@ -777,7 +870,7 @@ local function cmd_review(cmd_opts)
     local out = { ("review: %s"):format(path) }
     for _, t in ipairs(doc.threads) do
       out[#out + 1] = ("  [%s] %s %s:%d (%d comment(s))"):format(
-        t.status, t.id, t.anchor.path, t.anchor.line, #t.comments)
+        store.awaiting_human(t) and "awaiting you" or t.status, t.id, t.anchor.path, t.anchor.line, #t.comments)
     end
     if doc.review.summary then
       out[#out + 1] = "  summary: " .. doc.review.summary
@@ -819,7 +912,7 @@ function M.init()
 
   api.nvim_create_user_command("DiffviewReview", cmd_review, {
     nargs = "?",
-    complete = function() return { "list", "pick", "reload", "clear", "resolve-all", "setup", "uninstall" } end,
+    complete = function() return { "list", "pick", "awaiting", "reload", "clear", "resolve-all", "setup", "uninstall" } end,
   })
 
   -- One-line, once-per-session nudge when the AI side isn't wired: opt-in

@@ -73,6 +73,18 @@ M.diff_file_list = async.wrap(function(adapter, left, right, path_args, dv_opt, 
   local errors = {}
 
   ;(function()
+    -- `ls-files --others` walks the whole tree: run it alongside the tracked
+    -- diff rather than after it.
+    local untracked = async.wrap(function(cb)
+      if not await(adapter:show_untracked({
+          dv_opt = dv_opt,
+          revs = { left = left, right = right },
+        }))
+      then return cb(nil, nil, false) end
+      local uerr, ufiles = await(adapter:untracked_files(left, right, opt))
+      cb(uerr, ufiles, true)
+    end)()
+
     local err, tfiles, tconflicts = await(
       adapter:tracked_files(
         left,
@@ -92,20 +104,23 @@ M.diff_file_list = async.wrap(function(adapter, left, right, path_args, dv_opt, 
     files:set_working(tfiles)
     files:set_conflicting(tconflicts)
 
-    if not adapter:show_untracked({
-        dv_opt = dv_opt,
-        revs = { left = left, right = right },
-      })
-    then return end
-
     ---@diagnostic disable-next-line: redefined-local
-    local err, ufiles = await(adapter:untracked_files(left, right, opt))
+    local err, ufiles, shown = await(untracked)
+    if not shown then return end
 
     if err then
       errors[#errors+1] = err
       utils.err("Failed to get git status for untracked files!", true)
     else
-      files:set_working(utils.vec_join(files.working, ufiles))
+      -- A path untracked in the working tree but present in the base commit
+      -- (`git rm --cached`) is also listed by the tracked diff as `D`: keep one
+      -- row per path, as the panel tree can only show one.
+      local untracked_paths = {}
+      for _, f in ipairs(ufiles) do untracked_paths[f.path] = true end
+      local tracked = vim.tbl_filter(function(f)
+        return not (f.status == "D" and untracked_paths[f.path])
+      end, files.working)
+      files:set_working(utils.vec_join(tracked, ufiles))
 
       utils.merge_sort(files.working, function(a, b)
         return a.path:lower() < b.path:lower()

@@ -365,6 +365,9 @@ COMMANDS                                        *diffview-commands*
         Diffview. See |diffview-comments|. [subcommand] can be one of:
 
             • `list` (default): Echo all comment threads in the review.
+            • `pick`: Pick a thread and jump to it (threads awaiting your
+              reply first).
+            • `awaiting`: Pick among the threads awaiting your reply.
             • `reload`: Re-read the review file from disk and repaint (the
               fs-watcher makes this automatic; this is the manual escape
               hatch).
@@ -483,11 +486,23 @@ view.x.layout                                   *diffview-config-view.x.layout*
                     `T`         Open the real file for editing at the line
                               mapped from the cursor position
                               (|diffview-actions-jump_to_edit|).
-                    `]c` / `[c`   Jump to the next / previous hunk.
+                    `]c` / `[c`   Jump to the next / previous hunk; past the
+                              last / first hunk of a file, continue into
+                              the next / previous file.
 
                 The buffer is read-only by design: editing happens in the
                 real file via `T`, and the view re-renders live whenever the
                 file changes.
+
+                When the new side is the working tree, the language server
+                diagnostics of the real file are drawn on the added lines:
+                an underline, plus the most severe message at the end of the
+                line. Only severities from
+                |diffview-config-view.x.diagnostics_min_severity| up are
+                shown, and |diffview-config-view.x.disable_diagnostics| turns
+                it off. They are drawn as highlights, not set as diagnostics
+                of the diff buffer, so they never show up twice in diagnostic
+                lists.
 
                 ┌──────────────┐
                 │              │
@@ -553,7 +568,16 @@ view.x.disable_diagnostics
 
         Temporarily disable diagnostics for diff buffers while in a view. The
         diagnostics are automatically enabled again when leaving or closing
-        the view's tab page.
+        the view's tab page. In the unified layout this also turns off the
+        diagnostics drawn on the added lines (see |diffview-unified|).
+
+                                        *diffview-config-view.x.diagnostics_min_severity*
+view.x.diagnostics_min_severity
+        Type: `string | integer`, Default: `"WARN"`
+
+        Unified layout: the lowest |vim.diagnostic.severity| drawn on the
+        added lines (`"ERROR"`, `"WARN"`, `"INFO"` or `"HINT"`). Applies to
+        `view.default` and `view.file_history`.
 
 win_config                                      *diffview-config-win_config*
         Type: `table | fun(): table`, Default: `{}`
@@ -944,6 +968,12 @@ comment_open                                    *diffview-actions-comment_open*
         Reply to the comment thread on the current line, or start a new
         thread if there is none. See |diffview-comments|.
 
+comment_pick_awaiting                   *diffview-actions-comment_pick_awaiting*
+        Contexts: `diff_view`
+
+        Pick among the threads awaiting your reply (open threads the AI
+        answered last) and jump to one. See |diffview-comments-awaiting|.
+
 comment_resolve                                 *diffview-actions-comment_resolve*
         Contexts: `diff_view`
 
@@ -1114,10 +1144,20 @@ next_entry                                      *diffview-actions-next_entry*
 
         Bring the cursor in the subject panel to the next entry.
 
+next_awaiting                                   *diffview-actions-next_awaiting*
+        Contexts: `diff_view`
+
+        Move the cursor to the next thread awaiting your reply, continuing
+        through the files of the view (wraps around). See
+        |diffview-comments-awaiting|.
+
 next_hunk                                       *diffview-actions-next_hunk*
         Contexts: `diff_view`, `file_history_view`
 
-        Jump to the next hunk in the current diff.
+        Jump to the next hunk in the current diff. In a diff view, past the
+        last hunk of a file it continues to the first hunk of the next file
+        (file panel order; files without hunks are skipped) and stops at the
+        last file. In a file history view it wraps within the file.
 
 open_all_folds                                  *diffview-actions-open_all_folds*
         Contexts: `file_panel`, `file_history_panel`
@@ -1154,6 +1194,12 @@ options                                         *diffview-actions-options*
 
         Open the option panel for the subject.
 
+prev_awaiting                                   *diffview-actions-prev_awaiting*
+        Contexts: `diff_view`
+
+        Move the cursor to the previous thread awaiting your reply. See
+        |diffview-actions-next_awaiting|.
+
 prev_comment                                    *diffview-actions-prev_comment*
         Contexts: `diff_view`
 
@@ -1177,7 +1223,9 @@ prev_entry                                      *diffview-actions-prev_entry*
 prev_hunk                                       *diffview-actions-prev_hunk*
         Contexts: `diff_view`, `file_history_view`
 
-        Jump to the previous hunk in the current diff.
+        Jump to the previous hunk in the current diff. In a diff view, past
+        the first hunk of a file it continues to the last hunk of the
+        previous file. See |diffview-actions-next_hunk|.
 
 refresh_files                                   *diffview-actions-refresh_files*
         Contexts: `view`, `panel`
@@ -1412,10 +1460,12 @@ T                       Open the real file for editing at the line mapped
                         |diffview-actions-jump_to_edit|.
 
                                                 *diffview-maps-next_hunk*
-]c                      Jump to the next hunk in the current diff.
+]c                      Jump to the next hunk in the current diff, continuing
+                        into the next file. See |diffview-actions-next_hunk|.
 
                                                 *diffview-maps-prev_hunk*
-[c                      Jump to the previous hunk in the current diff.
+[c                      Jump to the previous hunk in the current diff,
+                        continuing into the previous file.
 
                                                 *diffview-maps-comments*
 <CR>                    Reply to the comment thread on the cursor line, or
@@ -1424,6 +1474,13 @@ T                       Open the real file for editing at the line mapped
 ]t                      Jump to the next comment thread.
 
 [t                      Jump to the previous comment thread.
+
+]r                      Jump to the next thread awaiting your reply, across
+                        files. See |diffview-comments-awaiting|.
+
+[r                      Jump to the previous thread awaiting your reply.
+
+<leader>gcq             Pick among the threads awaiting your reply.
 
 <leader>cd              Toggle resolved on the comment thread under the
                         cursor.
@@ -1586,15 +1643,28 @@ Default mappings in the view:
         `<CR>`        Reply to the thread on the cursor line, or start a new
                     one. Opens an input float: `<C-s>` submits, `q` cancels.
         `]t` / `[t`     Jump to the next / previous comment thread.
+        `]r` / `[r`     Jump to the next / previous thread awaiting your reply.
+        `<leader>gcq` Pick among the threads awaiting your reply.
         `<leader>cd`  Toggle resolved on the thread under the cursor.
         `<leader>cs`  Apply the thread's suggestion block to the real file.
 
 The review can be managed with the |:DiffviewReview| command: >vim
 
-        :DiffviewReview {list|reload|clear|resolve-all}
+        :DiffviewReview {list|pick|awaiting|reload|clear|resolve-all}
 <
 The file panel shows a per-file badge with the number of open threads
 (`🗨N`).
+
+                                                *diffview-comments-awaiting*
+A thread is awaiting you when it is open and the AI wrote its last comment —
+the complement of the AI's own queue. `]r` / `[r` walk those threads through
+the files of the view in file panel order, wrapping around. The comment
+picker lists them first, `<leader>gcq` (or `:DiffviewReview awaiting`) lists
+only them, and their file badges take the AI color
+(`DiffviewCommentSignAI`). The top of the file panel counts them
+(`N awaiting you · M open`) above the first line of the AI's review summary,
+and the message for an external write names the files whose threads
+changed.
 
 ==============================================================================
 
@@ -1652,6 +1722,32 @@ Config: >lua
 <
 Peek needs nothing but git: every base is one `git show` per side plus an
 in-process |vim.diff()|; blame mode is one `git blame -L` per step.
+
+==============================================================================
+
+REFERENCE AT CURSOR                             *diffview-ref*
+
+What the cursor (or a row range) in a diff window refers to, for plugins and
+mappings outside diffview. In the unified layout a rendered row is offset
+from its source line by every deleted line above it; this maps it back.
+>lua
+        local ok, ref = pcall(require, "diffview.ref")
+        local r = ok and ref.at_cursor({ range = { vim.fn.line("'<"), vim.fn.line("'>") } })
+        -- r = {
+        --   abs = "/repo/src/x.tsx", rel = "src/x.tsx",
+        --   side = "b", first = 42, last = 48,
+        --   lines = { { kind = "+", text = "...", lnum = 42 }, ... },
+        -- }
+<
+`range` is buffer rows (1-based, inclusive); without it the cursor row is
+used. Returns nil outside a diff window of the current tab's view (panels,
+other buffers). `kind` is `+`, `-` or a space; `lnum` is the old-file line for
+`-` and the new-file line otherwise. `side` is `a` only when every line is a
+deletion; `first`/`last` are the lines on `side`. `rel` is repo-relative.
+
+Caveats: the inline layout keeps no hunks, so each call there diffs the whole
+file (~5 ms for 5000 lines). For commit and file-history entries the line
+numbers are that revision's, while `abs`/`rel` name the working-tree file.
 
 ==============================================================================
 

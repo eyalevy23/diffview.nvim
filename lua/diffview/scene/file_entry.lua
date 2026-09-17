@@ -304,6 +304,7 @@ end
 ---@class FileEntry.with_layout.Opt : FileEntry.init.Opt
 ---@field nulled boolean
 ---@field get_data git.FileDataProducer?
+---@field binary? boolean
 
 ---@param layout_class Layout (class)
 ---@param opt FileEntry.with_layout.Opt
@@ -317,6 +318,7 @@ function FileEntry.with_layout(layout_class, opt)
       commit = opt.commit,
       get_data = opt.get_data,
       rev = rev,
+      binary = opt.binary,
       nulled = utils.sate(
         opt.nulled,
         select(2, pcall(layout_class.should_null, rev, opt.status, symbol))

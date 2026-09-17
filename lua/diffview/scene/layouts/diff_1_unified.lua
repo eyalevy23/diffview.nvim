@@ -17,7 +17,10 @@ local unified = require("diffview.scene.layouts.unified_render")
 require("diffview.comments").init()
 
 local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModule
+local FileHistoryView = lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
+local config = lazy.require("diffview.config") ---@module "diffview.config"
 local debounce = lazy.require("diffview.debounce") ---@module "diffview.debounce"
+local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
 local api = vim.api
@@ -160,7 +163,29 @@ function Diff1Unified:_render()
   local file = self:_ensure_unified_buf()
   local st, changed = unified.render(file.bufnr, self.a.file, self.b.file)
   self:_watch_source()
+  self:_watch_diagnostics(file.bufnr)
   return st, changed
+end
+
+---Mirror the new side's diagnostics onto the added rows. Only a working-tree
+---file has language servers attached; the view kind's `disable_diagnostics`
+---turns it off.
+---@private
+---@param bufnr integer
+function Diff1Unified:_watch_diagnostics(bufnr)
+  local b = self.b.file
+  local conf = config.get_config().view
+  local view = lib.get_current_view()
+  local opts = (view and FileHistoryView.__get():ancestorof(view)) and conf.file_history or conf.default
+
+  local src = b and b:is_valid() and not (b.nulled or b.binary) and b.rev.type == RevType.LOCAL
+    and not opts.disable_diagnostics and b.bufnr or nil
+  local min = opts.diagnostics_min_severity
+  if type(min) ~= "number" then
+    min = vim.diagnostic.severity[min or "WARN"] or vim.diagnostic.severity.WARN
+  end
+
+  unified.watch_diagnostics(bufnr, src, min)
 end
 
 ---Re-render after a source buffer changed, preserving cursor position.
@@ -253,6 +278,10 @@ Diff1Unified.open_files = async.void(function(self)
   for _, win in ipairs({ self.a, self.b }) do
     if win.file and not win.file:is_valid() then
       await(win:load_file())
+    elseif win.file and win.file.loaded then
+      -- Another open of this entry is still filling the buffer: rendering
+      -- now would diff against an empty side.
+      await(win.file.loaded)
     end
   end
 

@@ -233,8 +233,77 @@ function M.jump_to_edit()
   utils.set_cursor(0, target, cursor[2])
 end
 
+-- A cross-file jump is in flight: presses arriving meanwhile (key repeat) are
+-- dropped rather than stacking concurrent file switches.
+local cross_file_busy = false
+
+---@class CrossFileNavOpts
+---@field wrap boolean Continue past either end of the file list.
+---@field skip fun(entry: FileEntry): boolean Pass over a file without opening it.
+---@field row fun(buf: integer, dir: integer): integer? Landing row in an opened file.
+---@field on_end fun() Nothing to land on: the cursor is back where it started.
+---@field on_wrap? fun() Landed after wrapping around the list.
+
+---Continue a motion into the other files of the view, in file panel order:
+---open each candidate in turn and land on the first row `opts.row` yields.
+---If none does, return to the starting file and cursor.
+---@param view DiffView
+---@param dir integer 1 or -1
+---@param opts CrossFileNavOpts
+local cross_file_nav = async.void(function(view, dir, opts)
+  local files = view.panel:ordered_file_list()
+  local origin = utils.vec_indexof(files, view.cur_entry)
+  if origin == -1 then return end
+
+  local main = view.cur_layout:get_main_win()
+  local cursor = api.nvim_win_get_cursor(main.id)
+
+  cross_file_busy = true
+  local ok, err = pcall(function()
+    for step = 1, opts.wrap and #files or #files - 1 do
+      local i = origin + dir * step
+      local wrapped = i < 1 or i > #files
+      if wrapped and not opts.wrap then break end
+      local entry = files[(i - 1) % #files + 1]
+
+      if not opts.skip(entry) then
+        if entry ~= view.cur_entry then
+          await(view:set_file(entry, true, true))
+          if view.cur_entry ~= entry then return end
+        end
+
+        main = view.cur_layout:get_main_win()
+        if not main:is_valid() then return end
+        local row = opts.row(api.nvim_win_get_buf(main.id), dir)
+
+        if row then
+          utils.set_cursor(main.id, row, 0)
+          if wrapped and opts.on_wrap then opts.on_wrap() end
+          return
+        end
+      end
+    end
+
+    if view.cur_entry ~= files[origin] then
+      await(view:set_file(files[origin], true, true))
+      main = view.cur_layout:get_main_win()
+    end
+    if main:is_valid() then utils.set_cursor(main.id, cursor[1], cursor[2]) end
+    opts.on_end()
+  end)
+  cross_file_busy = false
+
+  if not ok then error(err) end
+end)
+
+---@param msg string
+local function nav_echo(msg)
+  api.nvim_echo({ { "[diffview] " .. msg } }, false, {})
+end
+
 ---@param dir integer 1 or -1
 local function unified_hunk_nav(dir)
+  if cross_file_busy then return end
   local view = lib.get_current_view()
 
   if not (view and view:instanceof(StandardView.__get())) then return end
@@ -252,20 +321,44 @@ local function unified_hunk_nav(dir)
     return
   end
 
+  -- Only a diff view continues into other files: a file history panel steps
+  -- through commits, not files.
+  local is_diff_view = view:instanceof(DiffView.__get())
   local row = api.nvim_win_get_cursor(main.id)[1]
-  local target = unified.next_hunk_row(buf, row, dir)
+  local target = unified.next_hunk_row(buf, row, dir, not is_diff_view)
 
   if target then
     utils.set_cursor(main.id, target, 0)
+  elseif is_diff_view then
+    ---@cast view DiffView
+    cross_file_nav(view, dir, {
+      wrap = false,
+      skip = function(entry)
+        -- numstat already says there is nothing to see (mode change, pure
+        -- rename): don't open it.
+        local s = entry.stats
+        return s ~= nil and s.additions == 0 and s.deletions == 0
+      end,
+      row = function(b, d)
+        local st = unified.state[b]
+        if not (st and #st.hunk_rows > 0) then return end
+        return d > 0 and st.hunk_rows[1] or st.hunk_rows[#st.hunk_rows]
+      end,
+      on_end = function()
+        nav_echo(dir > 0 and "Last hunk of the last file." or "First hunk of the first file.")
+      end,
+    })
   end
 end
 
----Jump to the next hunk in a unified diff buffer.
+---Jump to the next hunk in a unified diff buffer; past the last one, to the
+---first hunk of the next file.
 function M.next_hunk()
   unified_hunk_nav(1)
 end
 
----Jump to the previous hunk in a unified diff buffer.
+---Jump to the previous hunk in a unified diff buffer; past the first one, to
+---the last hunk of the previous file.
 function M.prev_hunk()
   unified_hunk_nav(-1)
 end
@@ -309,6 +402,66 @@ end
 ---Jump to the previous comment thread.
 function M.prev_comment()
   require("diffview.comments").comment_nav(-1)
+end
+
+---@param dir integer 1 or -1
+local function awaiting_nav(dir)
+  if cross_file_busy then return end
+  local view = lib.get_current_view()
+
+  if not (view and view:instanceof(DiffView.__get())) then return end
+  ---@cast view DiffView
+
+  local main = view.cur_layout:get_main_win()
+  if not main:is_valid() then return end
+
+  local comments = require("diffview.comments")
+  local cur = api.nvim_win_get_cursor(main.id)[1]
+  local rows = comments.awaiting_rows(api.nvim_win_get_buf(main.id))
+
+  for k = dir > 0 and 1 or #rows, dir > 0 and #rows or 1, dir do
+    if (rows[k] - cur) * dir > 0 then
+      utils.set_cursor(main.id, rows[k], 0)
+      return
+    end
+  end
+
+  local review = comments.index_for(view.adapter)
+  if review.n_awaiting == 0 then
+    nav_echo(("Nothing awaiting you (%d open)."):format(review.n_open))
+    return
+  end
+
+  cross_file_nav(view, dir, {
+    wrap = true,
+    skip = function(entry) return not review.awaiting[entry.path] end,
+    row = function(b, d)
+      local r = comments.awaiting_rows(b)
+      return d > 0 and r[1] or r[#r]
+    end,
+    on_wrap = function()
+      nav_echo(dir > 0 and "Wrapped to the first thread awaiting you." or "Wrapped to the last thread awaiting you.")
+    end,
+    on_end = function()
+      nav_echo(("%d awaiting you, none placed in this diff (:DiffviewReview awaiting)."):format(review.n_awaiting))
+    end,
+  })
+end
+
+---Jump to the next open thread whose last comment is the AI's, continuing
+---through the files of the view (wraps).
+function M.next_awaiting()
+  awaiting_nav(1)
+end
+
+---Jump to the previous open thread whose last comment is the AI's.
+function M.prev_awaiting()
+  awaiting_nav(-1)
+end
+
+---Pick among the threads awaiting your reply.
+function M.comment_pick_awaiting()
+  require("diffview.comments").comment_pick({ awaiting = true })
 end
 
 ---Peek: a float over the real file showing the change around the cursor

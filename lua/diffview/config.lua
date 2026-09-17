@@ -75,6 +75,8 @@ M.defaults = {
     default = {
       layout = "diff1_unified",
       disable_diagnostics = false,
+      -- Unified layout: lowest severity mirrored onto the added lines.
+      diagnostics_min_severity = "WARN",
       winbar_info = false,
     },
     merge_tool = {
@@ -85,6 +87,7 @@ M.defaults = {
     file_history = {
       layout = "diff1_unified",
       disable_diagnostics = false,
+      diagnostics_min_severity = "WARN",
       winbar_info = false,
     },
   },
@@ -151,6 +154,9 @@ M.defaults = {
       { "n", "E",            actions.comment_read,                  { desc = "Comment: read thread in a float" } },
       { "n", "]t",           actions.next_comment,                  { desc = "Next comment thread" } },
       { "n", "[t",           actions.prev_comment,                  { desc = "Prev comment thread" } },
+      { "n", "]r",           actions.next_awaiting,                 { desc = "Next thread awaiting you" } },
+      { "n", "[r",           actions.prev_awaiting,                 { desc = "Prev thread awaiting you" } },
+      { "n", "<leader>gcq",  actions.comment_pick_awaiting,         { desc = "Comment: threads awaiting you" } },
       { "n", "<leader>gcc",  actions.comment_open,                  { desc = "Comment: reply / new" } },
       { "n", "<leader>gce",  actions.comment_edit,                  { desc = "Comment: edit your comment" } },
       { "n", "<leader>gcr",  actions.comment_resolve,               { desc = "Comment: resolve toggle" } },

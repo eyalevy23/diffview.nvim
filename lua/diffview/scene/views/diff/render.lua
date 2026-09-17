@@ -110,13 +110,18 @@ local function render_file(comp, show_path, depth, width)
   end
 
   do
-    -- Open review-comment threads on this file (comments module is loaded
-    -- lazily by the unified layout; don't force it here).
+    -- Open review-comment threads on this file, AI-colored while any awaits
+    -- your reply (comments module is loaded lazily by the unified layout;
+    -- don't force it here).
     local comments = package.loaded["diffview.comments"]
     if comments then
-      local n = comments.count_for(file.adapter, file.path)
-      if n > 0 then
-        right[#right + 1] = { (" %s%d"):format(conf.comments.icon, n), "DiffviewCommentCount" }
+      local review = comments.index_for(file.adapter)
+      local n = review.open[file.path]
+      if n then
+        right[#right + 1] = {
+          (" %s%d"):format(conf.comments.icon, n),
+          review.awaiting[file.path] and "DiffviewCommentSignAI" or "DiffviewCommentCount",
+        }
       end
     end
   end
@@ -293,6 +298,21 @@ return function(panel)
     pl:truncate(pl:vim_fnamemodify(panel.adapter.ctx.toplevel, ":~"), width - 6),
     "DiffviewFilePanelRootPath"
   )
+
+  local comments = package.loaded["diffview.comments"]
+  local review = comments and comments.index_for(panel.adapter)
+
+  if review and review.n_open > 0 then
+    comp:add_text(
+      ("%s %d awaiting you"):format((conf.comments.icons or {}).ai or "", review.n_awaiting),
+      review.n_awaiting > 0 and "DiffviewCommentSignAI" or "DiffviewFilePanelPath"
+    )
+    comp:add_line((" · %d open"):format(review.n_open), "DiffviewFilePanelPath")
+  end
+
+  if review and review.summary then
+    comp:add_line(truncate_text(review.summary:match("^[^\n]*"), text_width), "DiffviewFilePanelPath")
+  end
 
   if conf.show_help_hints and panel.help_mapping then
     comp:add_text("Help: ", "DiffviewFilePanelPath")

@@ -49,6 +49,9 @@ local TS_BLOCK = 120
 ---@field col_wrap? string statuscolumn for wrapped continuation rows
 ---@field col_blank? string statuscolumn for virtual (virt_lines) rows
 ---@field ts_cache table<integer, false|{ [1]: integer, [2]: integer, [3]: string }[]>
+---@field diag_src? integer source buffer whose diagnostics are mirrored
+---@field diag_min? integer lowest mirrored severity
+---@field diag_dirty? boolean diagnostics changed while not on screen
 
 ---@type table<integer, UnifiedState>
 M.state = {}
@@ -97,8 +100,9 @@ end
 ---@param bufnr integer
 ---@param row integer
 ---@param dir integer 1 or -1
+---@param wrap? boolean Wrap around the buffer instead of returning nil.
 ---@return integer?
-function M.next_hunk_row(bufnr, row, dir)
+function M.next_hunk_row(bufnr, row, dir, wrap)
   local st = M.state[bufnr]
   if not st or #st.hunk_rows == 0 then return end
 
@@ -106,17 +110,19 @@ function M.next_hunk_row(bufnr, row, dir)
     for _, r in ipairs(st.hunk_rows) do
       if r > row then return r end
     end
-    return st.hunk_rows[1] -- wrap
+    return wrap and st.hunk_rows[1] or nil
   else
     for i = #st.hunk_rows, 1, -1 do
       if st.hunk_rows[i] < row then return st.hunk_rows[i] end
     end
-    return st.hunk_rows[#st.hunk_rows] -- wrap
+    return wrap and st.hunk_rows[#st.hunk_rows] or nil
   end
 end
 
 function M.cleanup(bufnr)
+  local st = M.state[bufnr]
   M.state[bufnr] = nil
+  if st and st.diag_src then M.unwatch_diagnostics(bufnr, st.diag_src) end
 end
 
 ---@param file? vcs.File
@@ -391,6 +397,7 @@ function M.render(bufnr, file_a, file_b)
   local lines, st, hunks = M.build(old_lines, new_lines)
   st.buf_a, st.buf_b = buf_a, buf_b
   st.tick_a, st.tick_b = tick_a, tick_b
+  if prev then st.diag_src, st.diag_min = prev.diag_src, prev.diag_min end
 
   vim.bo[bufnr].modifiable = true
   api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -398,6 +405,7 @@ function M.render(bufnr, file_a, file_b)
 
   M.state[bufnr] = st
   M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
+  M.paint_diagnostics(bufnr)
 
   -- Color the default-visible region up front (normal context — parser
   -- creation is not allowed during redraw). Rows inside folds fill lazily via
@@ -539,6 +547,134 @@ end
 ---'foldtext' callback: "··· N unchanged lines ···" (fillchars 'fold' pads).
 function M.foldtext()
   return ("─── ··· %d unchanged lines ··· "):format(vim.v.foldend - vim.v.foldstart + 1)
+end
+
+--#endregion
+
+--#region new-side diagnostics
+
+-- The working-tree file behind a diff is a real buffer with language servers
+-- attached, so its diagnostics are mirrored onto the added rows. Drawn as
+-- plain extmarks rather than vim.diagnostic.set(): a second copy of every
+-- diagnostic would show up in workspace lists (quickfix, pickers, statusline
+-- counts) under the diff buffer's name.
+local ns_diag = api.nvim_create_namespace("diffview_unified_diag")
+
+local SEVERITY_NAMES = { "Error", "Warn", "Info", "Hint" }
+
+---source bufnr -> rendered buffers mirroring it
+---@type table<integer, table<integer, true>>
+local diag_watch = {}
+
+---Repaint the mirrored diagnostics of a rendered buffer: an underline per
+---diagnostic plus the most severe message at the end of its row.
+---@param bufnr integer
+function M.paint_diagnostics(bufnr)
+  local st = M.state[bufnr]
+  if not (st and api.nvim_buf_is_valid(bufnr)) then return end
+  st.diag_dirty = nil
+  api.nvim_buf_clear_namespace(bufnr, ns_diag, 0, -1)
+
+  local src = st.diag_src
+  if not (src and api.nvim_buf_is_valid(src)) then return end
+  if vim.diagnostic.is_enabled and not vim.diagnostic.is_enabled({ bufnr = src }) then return end
+
+  local signs = vim.diagnostic.config().signs
+  local icons = type(signs) == "table" and signs.text or {}
+  local top = {} ---@type table<integer, vim.Diagnostic>
+
+  for _, d in ipairs(vim.diagnostic.get(src, { severity = { min = st.diag_min } })) do
+    local row = st.row_of_new[d.lnum + 1]
+    if row and st.line_map[row].kind == "add" then
+      local one_line = d.end_lnum == d.lnum
+      api.nvim_buf_set_extmark(bufnr, ns_diag, row - 1, d.col, {
+        end_row = one_line and row - 1 or row,
+        end_col = one_line and d.end_col or 0,
+        hl_group = "DiagnosticUnderline" .. SEVERITY_NAMES[d.severity],
+        strict = false,
+        priority = 55,
+      })
+      if not top[row] or d.severity < top[row].severity then top[row] = d end
+    end
+  end
+
+  for row, d in pairs(top) do
+    local icon = icons[d.severity]
+    api.nvim_buf_set_extmark(bufnr, ns_diag, row - 1, 0, {
+      virt_text = { {
+        (icon and icon .. " " or "") .. d.message:match("^[^\n]*"),
+        "DiagnosticVirtualText" .. SEVERITY_NAMES[d.severity],
+      } },
+      virt_text_pos = "eol",
+      hl_mode = "combine",
+      priority = 55,
+    })
+  end
+end
+
+---Drop a destroyed rendered buffer from the mirror; the listener goes with
+---the last one.
+---@param bufnr integer
+---@param src integer
+function M.unwatch_diagnostics(bufnr, src)
+  local bufs = diag_watch[src]
+  if not bufs then return end
+  bufs[bufnr] = nil
+  if next(bufs) == nil then diag_watch[src] = nil end
+  if next(diag_watch) == nil then
+    pcall(api.nvim_del_augroup_by_name, "diffview_unified_diag")
+  end
+end
+
+local function on_diagnostic_changed(args)
+  local bufs = diag_watch[args.buf]
+  if not bufs then return end
+
+  for bufnr in pairs(bufs) do
+    local st = M.state[bufnr]
+    if not (st and st.diag_src == args.buf) then
+      bufs[bufnr] = nil
+    elseif #vim.fn.win_findbuf(bufnr) > 0 then
+      M.paint_diagnostics(bufnr)
+    else
+      st.diag_dirty = true
+    end
+  end
+
+  if next(bufs) == nil then diag_watch[args.buf] = nil end
+end
+
+---Mirror the diagnostics of `src` onto the added rows of the rendered buffer
+---`bufnr` (nil `src` stops). Changes arriving while the diff is off screen
+---are only flagged; the repaint happens when it is rendered again.
+---@param bufnr integer
+---@param src? integer
+---@param min_severity? integer
+function M.watch_diagnostics(bufnr, src, min_severity)
+  local st = M.state[bufnr]
+  if not st then return end
+
+  if st.diag_src == src and st.diag_min == min_severity then
+    if st.diag_dirty then M.paint_diagnostics(bufnr) end
+    return
+  end
+
+  st.diag_src, st.diag_min = src, min_severity
+  if src then
+    if next(diag_watch) == nil then
+      -- One listener for every mirrored diff, only while there are any.
+      api.nvim_create_autocmd("DiagnosticChanged", {
+        group = api.nvim_create_augroup("diffview_unified_diag", { clear = true }),
+        callback = function(args)
+          on_diagnostic_changed(args)
+          if next(diag_watch) == nil then return true end
+        end,
+      })
+    end
+    diag_watch[src] = diag_watch[src] or {}
+    diag_watch[src][bufnr] = true
+  end
+  M.paint_diagnostics(bufnr)
 end
 
 --#endregion

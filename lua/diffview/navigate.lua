@@ -108,19 +108,29 @@ function M.open_at(args, abs_path, side, lnum)
   if not view then return end
   view:open()
 
-  -- The file list arrives asynchronously; `initialized` flips on the first
-  -- `files_updated`.
-  local tries = 0
-  local function poll()
-    if not vim.tbl_contains(lib.views, view) then return end
-    if view.initialized and view.ready then
+  -- The file list arrives asynchronously, with the first `files_updated`.
+  view.emitter:once("files_updated", vim.schedule_wrap(function()
+    if vim.tbl_contains(lib.views, view) then
       land(view, abs_path, side, lnum)
-    elseif tries < 100 then
-      tries = tries + 1
-      vim.defer_fn(poll, 50)
     end
-  end
-  vim.defer_fn(poll, 50)
+  end))
+end
+
+---Run `open` (which opens a view, possibly after async work such as the
+---branch diff's merge-base), then `cb` once that view's file list is in: on
+---its first `files_updated`, with no polling. `cb` never runs when no view
+---opens (a bad rev, not a repo).
+---@param open fun()
+---@param cb fun()
+function M.when_files_ready(open, cb)
+  local requested = vim.uv.now()
+  DiffviewGlobal.emitter:once("view_opened", function(_, view)
+    -- A failed open never emits; don't let a view opened much later by
+    -- something else fire this stale request.
+    if vim.uv.now() - requested > 10000 then return end
+    view.emitter:once("files_updated", vim.schedule_wrap(cb))
+  end)
+  open()
 end
 
 return M

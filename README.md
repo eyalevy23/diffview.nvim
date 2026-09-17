@@ -19,7 +19,9 @@ Highlights of this fork:
   patch-style diff rendered into a read-only buffer where added *and* deleted
   lines are real, selectable lines — with a dual line-number gutter, word-level
   diff highlights, Treesitter colors, folded unchanged regions, and `T` to jump
-  to the real file for editing.
+  to the real file for editing. `]c` / `[c` run through the hunks of every
+  file in turn, and the working-tree file's LSP errors and warnings show on
+  the added lines.
 - **Peek (`:DiffviewPeek`):** in any real file, a float showing what the line
   looked like before — vs the index, vs the branch base, or the commit that
   last touched it, with one-key walking through its history.
@@ -100,12 +102,17 @@ npx skills add eyalevy23/diffview.nvim
 | `<CR>` | Reply to the thread on the line, or start a new one |
 | `E` | Read the thread in a scrollable float (toggles; long cards truncate inline at `comments.max_card_height` rows). Inside the float: `↵`/`r` reply, `e` edit, `a` apply, `s` resolve, `q` close |
 | `]t` / `[t` | Next / previous thread |
+| `]r` / `[r` | Next / previous thread awaiting your reply (the AI spoke last), across files |
+| `<leader>gcq` | Pick among the threads awaiting your reply (`:DiffviewReview awaiting`) |
 | `<leader>gcc` | Reply / new comment |
 | `<leader>gce` | Edit your own comment |
 | `<leader>gcr` | Toggle resolved |
 | `<leader>gca` | Apply the suggestion to the file |
 | `<leader>gcn` / `<leader>gcp` | Next / previous thread |
 | `<leader>gcD` | Delete ALL threads (asks first) |
+
+The file panel's header counts the threads awaiting your reply and shows the
+first line of the AI's review summary; their files' badges take the AI color.
 
 ### Find in the diff
 
@@ -370,6 +377,7 @@ require("diffview").setup({
       -- Config for changed files, and staged files in diff views.
       layout = "diff1_unified",
       disable_diagnostics = false,  -- Temporarily disable diagnostics for diff buffers while in the view.
+      diagnostics_min_severity = "WARN", -- Unified layout: lowest severity drawn on added lines.
       winbar_info = false,          -- See |diffview-config-view.x.winbar_info|
     },
     merge_tool = {
@@ -382,6 +390,7 @@ require("diffview").setup({
       -- Config for changed files in file history views.
       layout = "diff1_unified",
       disable_diagnostics = false,  -- Temporarily disable diagnostics for diff buffers while in the view.
+      diagnostics_min_severity = "WARN",
       winbar_info = false,          -- See |diffview-config-view.x.winbar_info|
     },
   },
@@ -440,6 +449,9 @@ require("diffview").setup({
       { "n", "E",           actions.comment_read,                   { desc = "Comment: read the thread here in a scrollable float" } },
       { "n", "]t",          actions.next_comment,                   { desc = "Jump to the next comment thread" } },
       { "n", "[t",          actions.prev_comment,                   { desc = "Jump to the previous comment thread" } },
+      { "n", "]r",          actions.next_awaiting,                  { desc = "Next thread awaiting you" } },
+      { "n", "[r",          actions.prev_awaiting,                  { desc = "Prev thread awaiting you" } },
+      { "n", "<leader>gcq", actions.comment_pick_awaiting,          { desc = "Comment: threads awaiting you" } },
       { "n", "<leader>gcr", actions.comment_resolve,                { desc = "Comment: toggle resolved on the thread here" } },
       { "n", "<leader>gca", actions.comment_apply,                  { desc = "Comment: apply the suggestion of the thread here" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },

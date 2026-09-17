@@ -19,11 +19,7 @@ local SIGN_APPLIED = "✓"
 -- comment boxes on an ultrawide read worse than a bounded card.
 local MAX_CARD_WIDTH = 100
 
----@param author string
----@return boolean
-local function is_ai(author)
-  return author == "claude" or author == "ai"
-end
+local is_ai = require("diffview.comments.store").is_ai
 
 ---In-card author styling (carries the card background).
 ---@param author string

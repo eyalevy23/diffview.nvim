@@ -45,8 +45,9 @@ local M = {}
 ---@field merge_ctx? vcs.MergeContext
 ---@field initialized boolean
 ---@field valid boolean
----@field watcher uv_fs_poll_t # UV fs poll handle.
+---@field watcher uv_fs_event_t # Git dir watcher, for index changes.
 ---@field watch_augroup integer? # Augroup for the index watcher's focus listeners.
+---@field watch_paused boolean? # Neovim doesn't have focus: index changes are ignored.
 local DiffView = oop.create_class("DiffView", StandardView.__get())
 
 ---DiffView constructor
@@ -88,24 +89,25 @@ function DiffView:post_open()
   })
 
   if config.get_config().watch_index and self.adapter:instanceof(GitAdapter.__get()) then
-    self.watcher = vim.loop.new_fs_poll()
     self:watch_index_start()
 
-    -- Pause the poll while Neovim doesn't have focus: there's no point burning
-    -- an event-loop wakeup every second to stat the index when the user isn't
-    -- looking. Terminals without focus reporting simply never fire these
-    -- events, in which case the watcher keeps running as before.
+    -- Ignore index changes while Neovim doesn't have focus: a background tool's
+    -- git calls shouldn't rerun `git diff` for a view nobody is looking at
+    -- (FocusGained refreshes anyway). A flag rather than stopping the watcher:
+    -- restarting it re-creates the FSEvents stream on every focus switch.
+    -- Terminals without focus reporting simply never fire these events, in
+    -- which case the watcher stays live.
     self.watch_augroup = api.nvim_create_augroup(
       fmt("diffview_watch_index_%d", self.tabpage),
       { clear = true }
     )
     api.nvim_create_autocmd("FocusLost", {
       group = self.watch_augroup,
-      callback = function() self:watch_index_stop() end,
+      callback = function() self.watch_paused = true end,
     })
     api.nvim_create_autocmd("FocusGained", {
       group = self.watch_augroup,
-      callback = function() self:watch_index_start() end,
+      callback = function() self.watch_paused = false end,
     })
   end
 
@@ -175,30 +177,30 @@ function DiffView:file_open_post(e, new_entry, old_entry)
   end
 end
 
----(Re)start polling the Git index for changes. Idempotent: stopping first
----makes it safe to call on an already-active handle (e.g. repeated
----`FocusGained` without an intervening `FocusLost`).
+---Start watching the Git index for changes. Watches the git dir rather than
+---the index file: git replaces the index by renaming `index.lock` over it,
+---which a watch on the file itself loses. The kernel pushes the events, so an
+---idle view costs no wakeups.
 function DiffView:watch_index_start()
-  if not self.watcher then return end
+  self.watcher = vim.loop.new_fs_event()
 
-  self.watcher:stop()
-  self.watcher:start(
-    self.adapter.ctx.dir .. "/index",
-    1000,
-    ---@diagnostic disable-next-line: unused-local
-    vim.schedule_wrap(function(err, prev, cur)
-      if not err and self:is_cur_tabpage() then
+  -- One refresh per burst, and at most one a second: `git add` + `git reset`,
+  -- or a tool running `git status` in a loop, each rewrite the index. The first
+  -- refresh waits 150 ms for the rest of a burst.
+  local scheduled, last = false, 0
+
+  self.watcher:start(self.adapter.ctx.dir, {}, function(err, filename)
+    if err or filename ~= "index" or scheduled or self.watch_paused then return end
+    scheduled = true
+
+    vim.defer_fn(function()
+      scheduled = false
+      last = vim.loop.now()
+      if not self.closing:check() and self:is_cur_tabpage() then
         self:update_files()
       end
-    end)
-  )
-end
-
----Pause polling the Git index. Safe to call when the watcher is inactive.
-function DiffView:watch_index_stop()
-  if self.watcher then
-    self.watcher:stop()
-  end
+    end, math.max(150, 1000 - (vim.loop.now() - last)))
+  end)
 end
 
 ---@override
@@ -315,8 +317,10 @@ DiffView.set_file = async.void(function(self, file, focus, highlight)
 
       await(self:_set_file(file))
 
-      if focus then
-        api.nvim_set_current_win(self.cur_layout:get_main_win().id)
+      -- The view may have closed while the file loaded.
+      local main = focus and self.cur_layout:get_main_win()
+      if main and main:is_valid() then
+        api.nvim_set_current_win(main.id)
       end
     end
   end

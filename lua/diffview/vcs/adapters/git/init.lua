@@ -166,10 +166,18 @@ function GitAdapter.get_repo_paths(path_args, cpath)
   return paths, top_indicators
 end
 
+-- Directory -> toplevel, and toplevel -> git dir, for the session: both are
+-- fixed for an existing repo, and resolving them is a blocking `git rev-parse`
+-- each on every peek, view open and command-line completion. Only successes
+-- are cached, so a later `git init` is still picked up.
+local toplevel_cache = {} ---@type table<string, string>
+local git_dir_cache = {} ---@type table<string, string>
+
 ---Get the git toplevel directory from a path to file or directory
 ---@param path string
 ---@return string?
 local function get_toplevel(path)
+  if toplevel_cache[path] then return toplevel_cache[path] end
   local out, code = utils.job(utils.flatten({
     config.get_config().git_cmd,
     { "rev-parse", "--path-format=absolute", "--show-toplevel" },
@@ -177,7 +185,8 @@ local function get_toplevel(path)
   if code ~= 0 then
     return nil
   end
-  return out[1] and vim.trim(out[1])
+  toplevel_cache[path] = out[1] and vim.trim(out[1])
+  return toplevel_cache[path]
 end
 
 ---Try to find the top-level of a working tree by using the given indicative
@@ -275,11 +284,13 @@ function GitAdapter:get_log_args(args)
 end
 
 function GitAdapter:get_dir(path)
+  if git_dir_cache[path] then return git_dir_cache[path] end
   local out, code = self:exec_sync({ "rev-parse", "--path-format=absolute", "--git-dir" }, path)
   if code ~= 0 then
     return nil
   end
-  return out[1] and vim.trim(out[1])
+  git_dir_cache[path] = out[1] and vim.trim(out[1])
+  return git_dir_cache[path]
 end
 
 ---Verify that a given git rev is valid.
@@ -1664,34 +1675,40 @@ function GitAdapter:add_files(paths)
 end
 
 ---Check whether untracked files should be listed.
+---@param self GitAdapter
 ---@param opt? VCSAdapter.show_untracked.Opt
----@return boolean
-function GitAdapter:show_untracked(opt)
+---@param callback fun(show: boolean)
+GitAdapter.show_untracked = async.wrap(function(self, opt, callback)
   opt = opt or {}
 
   if opt.revs then
-    -- Never show untracked files when comparing against anything other than
-    -- the index
-    if not (opt.revs.left.type == RevType.STAGE and opt.revs.right.type == RevType.LOCAL) then
-      return false
+    -- Untracked files are part of any diff against the working tree: the
+    -- index (:DiffviewOpen) or a commit (:DiffviewBranch's merge-base).
+    if opt.revs.right.type ~= RevType.LOCAL then
+      callback(false)
+      return
     end
   end
 
   -- Check the user provided flag options
   if opt.dv_opt then
     if type(opt.dv_opt.show_untracked) == "boolean" and not opt.dv_opt.show_untracked then
-      return false
+      callback(false)
+      return
     end
   end
 
-  -- Fall back to checking git config
-  local out = self:exec_sync(
-    { "config", "status.showUntrackedFiles" },
-    { cwd = self.ctx.toplevel, silent = true }
-  )
+  -- Fall back to checking git config. Async: this runs on every refresh.
+  local job = Job({
+    command = self:bin(),
+    args = utils.vec_join(self:args(), "config", "status.showUntrackedFiles"),
+    cwd = self.ctx.toplevel,
+    log_opt = { silent = true },
+  })
+  await(job)
 
-  return vim.trim(out[1] or "") ~= "no"
-end
+  callback(vim.trim(job.stdout[1] or "") ~= "no")
+end)
 
 GitAdapter.tracked_files = async.wrap(function(self, left, right, args, kind, opt, callback)
   ---@type FileEntry[]
@@ -1818,6 +1835,9 @@ GitAdapter.tracked_files = async.wrap(function(self, left, right, args, kind, op
       oldpath = v.oldname,
       status = v.status,
       stats = v.stats,
+      -- numstat counted lines, so git saw text on both sides: no `git grep -I`
+      -- probe per side on first open. Binary ("-" stats) stays nil = probed.
+      binary = v.stats and false,
       kind = kind,
       revs = {
         a = left,
@@ -1894,7 +1914,9 @@ GitAdapter.untracked_files = async.wrap(function(self, left, right, opt, callbac
       "core.quotePath=false",
       "ls-files",
       "--others",
-      "--exclude-standard"
+      "--exclude-standard",
+      "--",
+      self.ctx.path_args
     ),
     cwd = self.ctx.toplevel,
     log_opt = { label = "GitAdapter:untracked_files()", }
@@ -1909,11 +1931,13 @@ GitAdapter.untracked_files = async.wrap(function(self, left, right, opt, callbac
 
   local files = {}
   for _, s in ipairs(job.stdout) do
+    local stats = untracked_file_stats(pl:absolute(s, self.ctx.toplevel))
     table.insert(files, FileEntry.with_layout(opt.default_layout, {
       adapter = self,
       path = s,
       status = "?",
-      stats = untracked_file_stats(pl:absolute(s, self.ctx.toplevel)),
+      stats = stats,
+      binary = stats and false,
       kind = "working",
       revs = {
         a = left,

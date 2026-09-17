@@ -288,11 +288,12 @@ end
 ---@field revs? { left: Rev, right: Rev }
 
 ---Check whether untracked files should be listed.
+---@param self VCSAdapter
 ---@param opt? VCSAdapter.show_untracked.Opt
----@return boolean
-function VCSAdapter:show_untracked(opt)
+---@param callback fun(show: boolean)
+VCSAdapter.show_untracked = async.wrap(function(self, opt, callback)
   oop.abstract_stub()
-end
+end)
 
 ---Restore file
 ---@param self VCSAdapter

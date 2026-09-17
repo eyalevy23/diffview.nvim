@@ -66,6 +66,26 @@ M.last_written = {}
 ---@field review { summary?: string, updated_at?: string }
 ---@field threads ReviewThread[]
 
+--#region thread helpers
+
+---@param author? string
+---@return boolean
+function M.is_ai(author)
+  return author == "claude" or author == "ai"
+end
+
+---An open thread where the AI spoke last: the human's turn. For open threads
+---this is the complement of `awaiting_claude` in
+---skills/review/scripts/review_core.py (the AI's queue) — keep them in sync.
+---@param thread ReviewThread
+---@return boolean
+function M.awaiting_human(thread)
+  local last = thread.comments[#thread.comments]
+  return thread.status == "open" and last ~= nil and M.is_ai(last.author)
+end
+
+--#endregion
+
 --#region time / id helpers
 
 ---@return string
