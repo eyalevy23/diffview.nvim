@@ -65,12 +65,19 @@ end)
 local function thread_label(thread)
   local icon = thread.status == "resolved" and "○"
     or thread.status == "applied" and "✓"
-    or store.awaiting_human(thread) and (require("diffview.config").get_config().comments.icons or {}).ai
+    or store.awaiting_human(thread) and (
+      require("diffview.config").get_config().comments.icons or {}
+    ).ai
     or "●"
   local first = thread.comments[1]
   local body = first and (first.body or ""):gsub("%s+", " ") or ""
   return ("%s %s:%d  %s — %s"):format(
-    icon, thread.anchor.path, thread.anchor.line, first and first.author or "?", body)
+    icon,
+    thread.anchor.path,
+    thread.anchor.line,
+    first and first.author or "?",
+    body
+  )
 end
 
 ---Pick a comment thread across every file of the review and jump to it. Open
@@ -88,9 +95,10 @@ function M.pick(opts)
       utils.err("[diffview] Open a diffview first.")
       return
     end
-    require("diffview.navigate").when_files_ready(function()
-      require("diffview").open_for_picker(opts.open)
-    end, function() M.pick({ awaiting = opts.awaiting }) end)
+    require("diffview.navigate").when_files_ready(
+      function() require("diffview").open_for_picker(opts.open) end,
+      function() M.pick({ awaiting = opts.awaiting }) end
+    )
     return
   end
 
@@ -136,34 +144,36 @@ function M.pick(opts)
   local t_actions = require("telescope.actions")
   local action_state = require("telescope.actions.state")
 
-  pickers.new({}, {
-    prompt_title = "Review threads",
-    finder = finders.new_table({
-      results = threads,
-      entry_maker = function(thread)
-        local label = thread_label(thread)
-        return { value = thread, display = label, ordinal = label }
+  pickers
+    .new({}, {
+      prompt_title = "Review threads",
+      finder = finders.new_table({
+        results = threads,
+        entry_maker = function(thread)
+          local label = thread_label(thread)
+          return { value = thread, display = label, ordinal = label }
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      previewer = previewers.new_buffer_previewer({
+        title = "Thread",
+        define_preview = function(self, entry)
+          -- Same content the reading float shows — one source of truth.
+          local lines = require("diffview.comments.float").lines(entry.value)
+          api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+          vim.bo[self.state.bufnr].filetype = "markdown"
+        end,
+      }),
+      attach_mappings = function(prompt_bufnr)
+        t_actions.select_default:replace(function()
+          local entry = action_state.get_selected_entry()
+          t_actions.close(prompt_bufnr)
+          if entry then goto_thread(entry.value) end
+        end)
+        return true
       end,
-    }),
-    sorter = conf.generic_sorter({}),
-    previewer = previewers.new_buffer_previewer({
-      title = "Thread",
-      define_preview = function(self, entry)
-        -- Same content the reading float shows — one source of truth.
-        local lines = require("diffview.comments.float").lines(entry.value)
-        api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
-        vim.bo[self.state.bufnr].filetype = "markdown"
-      end,
-    }),
-    attach_mappings = function(prompt_bufnr)
-      t_actions.select_default:replace(function()
-        local entry = action_state.get_selected_entry()
-        t_actions.close(prompt_bufnr)
-        if entry then goto_thread(entry.value) end
-      end)
-      return true
-    end,
-  }):find()
+    })
+    :find()
 end
 
 return M

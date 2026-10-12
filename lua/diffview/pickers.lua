@@ -17,7 +17,8 @@
 local lazy = require("diffview.lazy")
 
 local DiffView = lazy.access("diffview.scene.views.diff.diff_view", "DiffView") ---@type DiffView|LazyModule
-local FileHistoryView = lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
+local FileHistoryView =
+  lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
 local authors = lazy.require("diffview.authors") ---@module "diffview.authors"
 local config = lazy.require("diffview.config") ---@module "diffview.config"
@@ -97,8 +98,12 @@ end
 local function git_diff(adapter, args, cb)
   local cmd = utils.vec_join(
     adapter:get_command(),
-    "-c", "core.quotePath=false",
-    "diff", "--no-color", "--no-ext-diff", "-M",
+    "-c",
+    "core.quotePath=false",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "-M",
     args
   )
   vim.system(cmd, { cwd = adapter.ctx.toplevel, text = true }, function(out)
@@ -140,13 +145,9 @@ end
 ---@param cb fun(lines: string[])
 local function entry_patch(entry, cb)
   local args = entry_diff_args(entry)
-  if not args then
-    return cb(untracked_patch(entry))
-  end
+  if not args then return cb(untracked_patch(entry)) end
   local paths = { "--", entry.path }
-  if entry.oldpath and entry.oldpath ~= entry.path then
-    paths[#paths + 1] = entry.oldpath
-  end
+  if entry.oldpath and entry.oldpath ~= entry.path then paths[#paths + 1] = entry.oldpath end
   git_diff(entry.adapter, utils.vec_join(args, paths), cb)
 end
 
@@ -275,9 +276,7 @@ end
 
 ---@param l diffview.ChangedLine
 ---@return string
-local function line_label(l)
-  return ("%s:%d %s %s"):format(l.path, l.lnum, l.kind, vim.trim(l.text))
-end
+local function line_label(l) return ("%s:%d %s %s"):format(l.path, l.lnum, l.kind, vim.trim(l.text)) end
 
 ---Fill a preview buffer with a patch and highlight it as a diff.
 ---@param bufnr integer
@@ -316,15 +315,11 @@ local LOG_ARGS = { "log", "--topo-order", "--no-show-signature", "--format=%H%x0
 
 ---@param args string[]
 ---@return string[]
-local function git_cmd(args)
-  return utils.vec_join(config.get_config().git_cmd, args)
-end
+local function git_cmd(args) return utils.vec_join(config.get_config().git_cmd, args) end
 
 ---@param line string
 ---@return string? hash, string author, string subject
-local function parse_commit(line)
-  return line:match("^(%x+)\t([^\t]*)\t(.*)$")
-end
+local function parse_commit(line) return line:match("^(%x+)\t([^\t]*)\t(.*)$") end
 
 ---Hash sets of the commits not on main, and of those not pushed either, from
 ---two parallel `git rev-list`s. A set is nil when git failed.
@@ -337,18 +332,20 @@ end
 local function load_commit_status(cwd, cb)
   local sets, pending = {}, 2
   local function run(key, exclude, fallback)
-    local cmd = git_cmd(utils.vec_join("rev-list", "--ignore-missing", "HEAD", "--not", exclude, trunk.remote_refs))
+    local cmd = git_cmd(
+      utils.vec_join("rev-list", "--ignore-missing", "HEAD", "--not", exclude, trunk.remote_refs)
+    )
     vim.system(cmd, { cwd = cwd, text = true }, function(out)
       if out.code ~= 0 and fallback then return run(key, fallback) end
       if out.code == 0 then
         local set = {}
-        for hash in out.stdout:gmatch("%x+") do set[hash] = true end
+        for hash in out.stdout:gmatch("%x+") do
+          set[hash] = true
+        end
         sets[key] = set
       end
       pending = pending - 1
-      if pending == 0 then
-        vim.schedule(function() cb(sets.unmerged, sets.unpushed) end)
-      end
+      if pending == 0 then vim.schedule(function() cb(sets.unmerged, sets.unpushed) end) end
     end)
   end
   run("unmerged", {})
@@ -419,46 +416,48 @@ function M.pick_file(opts)
 
   local patch_cache = {} ---@type table<FileEntry, string[]>
 
-  pickers.new({}, {
-    prompt_title = "Diff files",
-    finder = finders.new_table({
-      results = files,
-      entry_maker = function(entry)
-        return {
-          value = entry,
-          display = file_label(entry),
-          ordinal = entry.path,
-          path = entry.absolute_path,
-        }
-      end,
-    }),
-    sorter = conf.file_sorter({}),
-    previewer = previewers.new_buffer_previewer({
-      title = "Patch",
-      dyn_title = function(_, entry) return entry.value.path end,
-      define_preview = function(self, entry)
-        local file = entry.value ---@type FileEntry
-        local bufnr = self.state.bufnr
-        local cached = patch_cache[file]
-        if cached then return show_patch(bufnr, cached) end
+  pickers
+    .new({}, {
+      prompt_title = "Diff files",
+      finder = finders.new_table({
+        results = files,
+        entry_maker = function(entry)
+          return {
+            value = entry,
+            display = file_label(entry),
+            ordinal = entry.path,
+            path = entry.absolute_path,
+          }
+        end,
+      }),
+      sorter = conf.file_sorter({}),
+      previewer = previewers.new_buffer_previewer({
+        title = "Patch",
+        dyn_title = function(_, entry) return entry.value.path end,
+        define_preview = function(self, entry)
+          local file = entry.value ---@type FileEntry
+          local bufnr = self.state.bufnr
+          local cached = patch_cache[file]
+          if cached then return show_patch(bufnr, cached) end
 
-        api.nvim_buf_set_lines(bufnr, 0, -1, false, { "…" })
-        entry_patch(file, function(lines)
-          patch_cache[file] = lines
-          -- The previewer may have moved on to another entry meanwhile.
-          if self.state.bufnr == bufnr then show_patch(bufnr, lines) end
+          api.nvim_buf_set_lines(bufnr, 0, -1, false, { "…" })
+          entry_patch(file, function(lines)
+            patch_cache[file] = lines
+            -- The previewer may have moved on to another entry meanwhile.
+            if self.state.bufnr == bufnr then show_patch(bufnr, lines) end
+          end)
+        end,
+      }),
+      attach_mappings = function(prompt_bufnr)
+        t_actions.select_default:replace(function()
+          local entry = action_state.get_selected_entry()
+          t_actions.close(prompt_bufnr)
+          if entry then goto_entry(view, entry.value) end
         end)
+        return true
       end,
-    }),
-    attach_mappings = function(prompt_bufnr)
-      t_actions.select_default:replace(function()
-        local entry = action_state.get_selected_entry()
-        t_actions.close(prompt_bufnr)
-        if entry then goto_entry(view, entry.value) end
-      end)
-      return true
-    end,
-  }):find()
+    })
+    :find()
 end
 
 ---Fuzzy-find across every added / deleted line of the current diff and jump
@@ -492,9 +491,13 @@ function M.pick_line(opts)
 
     local has_telescope, pickers = pcall(require, "telescope.pickers")
     if not has_telescope then
-      vim.ui.select(changes, { prompt = "Changed lines", format_item = line_label }, function(choice)
-        if choice then jump(choice) end
-      end)
+      vim.ui.select(
+        changes,
+        { prompt = "Changed lines", format_item = line_label },
+        function(choice)
+          if choice then jump(choice) end
+        end
+      )
       return
     end
 
@@ -534,54 +537,56 @@ function M.pick_line(opts)
       end
     end
 
-    pickers.new({}, {
-      prompt_title = "Changed lines",
-      finder = finders.new_table({
-        results = changes,
-        entry_maker = function(l)
-          local sign_hl = l.kind == "+" and "DiffviewUnifiedSignAdd" or "DiffviewUnifiedSignDel"
-          return {
-            value = l,
-            ordinal = ("%s %s:%d"):format(vim.trim(l.text), l.path, l.lnum),
-            display = function()
-              return displayer({
-                { l.kind, sign_hl },
-                ("%s:%d  %s"):format(l.path, l.lnum, vim.trim(l.text)),
-              })
-            end,
-            path = pl:absolute(l.path, view.adapter.ctx.toplevel),
-            lnum = l.lnum,
-          }
-        end,
-      }),
-      sorter = conf.generic_sorter({}),
-      previewer = previewers.new_buffer_previewer({
-        title = "Patch",
-        dyn_title = function(_, entry) return entry.value.path end,
-        define_preview = function(self, entry)
-          local l = entry.value ---@type diffview.ChangedLine
-          local bufnr = self.state.bufnr
-          local cached = patch_cache[l.path]
-          if cached then return show_at(self, l, cached) end
+    pickers
+      .new({}, {
+        prompt_title = "Changed lines",
+        finder = finders.new_table({
+          results = changes,
+          entry_maker = function(l)
+            local sign_hl = l.kind == "+" and "DiffviewUnifiedSignAdd" or "DiffviewUnifiedSignDel"
+            return {
+              value = l,
+              ordinal = ("%s %s:%d"):format(vim.trim(l.text), l.path, l.lnum),
+              display = function()
+                return displayer({
+                  { l.kind, sign_hl },
+                  ("%s:%d  %s"):format(l.path, l.lnum, vim.trim(l.text)),
+                })
+              end,
+              path = pl:absolute(l.path, view.adapter.ctx.toplevel),
+              lnum = l.lnum,
+            }
+          end,
+        }),
+        sorter = conf.generic_sorter({}),
+        previewer = previewers.new_buffer_previewer({
+          title = "Patch",
+          dyn_title = function(_, entry) return entry.value.path end,
+          define_preview = function(self, entry)
+            local l = entry.value ---@type diffview.ChangedLine
+            local bufnr = self.state.bufnr
+            local cached = patch_cache[l.path]
+            if cached then return show_at(self, l, cached) end
 
-          local file = files_by_path[l.path]
-          if not file then return end
-          api.nvim_buf_set_lines(bufnr, 0, -1, false, { "…" })
-          entry_patch(file, function(lines)
-            patch_cache[l.path] = lines
-            if self.state.bufnr == bufnr then show_at(self, l, lines) end
+            local file = files_by_path[l.path]
+            if not file then return end
+            api.nvim_buf_set_lines(bufnr, 0, -1, false, { "…" })
+            entry_patch(file, function(lines)
+              patch_cache[l.path] = lines
+              if self.state.bufnr == bufnr then show_at(self, l, lines) end
+            end)
+          end,
+        }),
+        attach_mappings = function(prompt_bufnr)
+          t_actions.select_default:replace(function()
+            local entry = action_state.get_selected_entry()
+            t_actions.close(prompt_bufnr)
+            if entry then jump(entry.value) end
           end)
+          return true
         end,
-      }),
-      attach_mappings = function(prompt_bufnr)
-        t_actions.select_default:replace(function()
-          local entry = action_state.get_selected_entry()
-          t_actions.close(prompt_bufnr)
-          if entry then jump(entry.value) end
-        end)
-        return true
-      end,
-    }):find()
+      })
+      :find()
   end)
 end
 
@@ -601,19 +606,23 @@ function M.pick_commit()
 
   local has_telescope, pickers = pcall(require, "telescope.pickers")
   if not has_telescope then
-    vim.system(git_cmd(LOG_ARGS), { cwd = cwd, text = true }, vim.schedule_wrap(function(out)
-      local commits = {}
-      for _, line in ipairs(vim.split(out.stdout or "", "\n", { trimempty = true })) do
-        local hash, _, subject = parse_commit(line)
-        if hash then commits[#commits + 1] = { hash = hash, subject = subject } end
-      end
-      vim.ui.select(commits, {
-        prompt = "Commits",
-        format_item = function(c) return c.hash:sub(1, 8) .. " " .. c.subject end,
-      }, function(choice)
-        if choice then open_commits(cwd, { choice.hash }) end
+    vim.system(
+      git_cmd(LOG_ARGS),
+      { cwd = cwd, text = true },
+      vim.schedule_wrap(function(out)
+        local commits = {}
+        for _, line in ipairs(vim.split(out.stdout or "", "\n", { trimempty = true })) do
+          local hash, _, subject = parse_commit(line)
+          if hash then commits[#commits + 1] = { hash = hash, subject = subject } end
+        end
+        vim.ui.select(commits, {
+          prompt = "Commits",
+          format_item = function(c) return c.hash:sub(1, 8) .. " " .. c.subject end,
+        }, function(choice)
+          if choice then open_commits(cwd, { choice.hash }) end
+        end)
       end)
-    end))
+    )
     return
   end
 
@@ -633,7 +642,9 @@ function M.pick_commit()
   load_commit_status(cwd, function(unmerged, unpushed)
     status.loaded, status.unmerged, status.unpushed = true, unmerged, unpushed
     local bufnr = picker and picker.results_bufnr
-    if not (drawn_early and picker.manager and bufnr and api.nvim_buf_is_valid(bufnr)) then return end
+    if not (drawn_early and picker.manager and bufnr and api.nvim_buf_is_valid(bufnr)) then
+      return
+    end
     for index = 1, math.min(picker.manager:num_results(), picker.max_results) do
       local entry = picker.manager:get_entry(index)
       if entry then picker:entry_adder(index, entry, nil, false) end
@@ -698,7 +709,8 @@ function M.pick_commit()
     attach_mappings = function(prompt_bufnr)
       t_actions.select_default:replace(function()
         local hovered = action_state.get_selected_entry()
-        local marked = vim.list_extend({}, action_state.get_current_picker(prompt_bufnr):get_multi_selection())
+        local marked =
+          vim.list_extend({}, action_state.get_current_picker(prompt_bufnr):get_multi_selection())
         -- Marking one commit with <Tab> and pressing <CR> on another means
         -- "diff these two" — count the hovered one in.
         if #marked <= 1 and hovered and not (marked[1] and marked[1].value == hovered.value) then
