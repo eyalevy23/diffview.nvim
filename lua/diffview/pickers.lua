@@ -258,7 +258,7 @@ end
 --#region display
 
 ---@param entry FileEntry
----@return string status, string path, string rest
+---@return string status, string path, string rest Rest keeps its leading spaces.
 local function file_fields(entry)
   local stats = entry.stats or {}
   local counts = ""
@@ -268,12 +268,12 @@ local function file_fields(entry)
   local kind = entry.kind == "staged" and " [staged]"
     or entry.kind == "conflicting" and " [conflict]"
     or ""
-  return entry.status or " ", entry.path, vim.trim(kind .. counts)
+  return entry.status or " ", entry.path, kind .. counts
 end
 
 ---@param entry FileEntry
 ---@return string
-local function file_label(entry) return vim.trim(table.concat({ file_fields(entry) }, " ")) end
+local function file_label(entry) return ("%s %s%s"):format(file_fields(entry)) end
 
 ---@param l diffview.ChangedLine
 ---@return string
@@ -490,7 +490,10 @@ function M.pick_file(opts)
   M.fzf_pick({
     title = "Diff files",
     items = files,
-    fields = file_fields,
+    fields = function(file)
+      local status, path, rest = file_fields(file)
+      return status, path, vim.trim(rest)
+    end,
     nth = "2",
     preview_title = function(file) return file.path end,
     preview = function(file, show)

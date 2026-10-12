@@ -790,7 +790,7 @@ function M.comment_clear_all()
 end
 
 ---Pick a comment thread across every file of the review and jump to it.
----Implemented in comments/picker.lua (required lazily — Telescope and the
+---Implemented in comments/picker.lua (required lazily — fzf-lua and the
 ---previewer never load until the first pick).
 ---@param opts? { open?: string, awaiting?: boolean } See picker.pick.
 function M.comment_pick(opts)
