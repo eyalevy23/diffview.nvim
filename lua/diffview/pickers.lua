@@ -295,7 +295,8 @@ end
 
 --#region fzf-lua
 
--- fzf-lua's own field separator: renders as a space, never typed in text.
+-- fzf-lua's own field separator: renders as a space. Text that contains one
+-- splits into more fields, so the last field of a row is matched open-ended.
 local SEP = "\u{2002}"
 
 ---@param i integer
@@ -564,7 +565,7 @@ function M.pick_line(opts)
       fields = function(l)
         return signs[l.kind], ("%s:%d  %s"):format(l.path, l.lnum, vim.trim(l.text))
       end,
-      nth = "2",
+      nth = "2..",
       preview_title = function(l) return l.path end,
       preview = function(l, show)
         if patch_cache[l.path] then return show_at(l, patch_cache[l.path], show) end
@@ -688,7 +689,7 @@ function M.pick_commit()
     end,
     -- The short hash and the subject only: 40 hex chars would let fuzzy
     -- queries match inside hashes.
-    nth = "1,3",
+    nth = "1,3..",
     multi = true,
     -- Marking one commit with <Tab> and pressing <CR> on another means "diff
     -- these two": with at most one marked, the hovered one counts in too.

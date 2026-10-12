@@ -116,7 +116,7 @@ first line of the AI's review summary; their files' badges take the AI color.
 
 ### Find in the diff
 
-Two Telescope pickers scoped to whatever view is open (a commit, the
+Two fzf-lua pickers scoped to whatever view is open (a commit, the
 uncommitted changes, the branch), for diffs too big to page through:
 
 | Key (in the view) | Action |

@@ -1053,7 +1053,7 @@ focus_files                                     *diffview-actions-focus_files*
 find_file                                       *diffview-actions-find_file*
         Contexts: `view`, `panel`
 
-        Fuzzy-find a file of the current view and open it (Telescope when
+        Fuzzy-find a file of the current view and open it (fzf-lua when
         available, |vim.ui.select()| otherwise). The preview shows the
         file's patch.
 

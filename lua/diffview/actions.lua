@@ -471,7 +471,7 @@ function M.peek()
   require("diffview.peek").open()
 end
 
----Fuzzy-find a file of the current view (Telescope when available).
+---Fuzzy-find a file of the current view (fzf-lua when available).
 function M.find_file()
   require("diffview.pickers").pick_file()
 end

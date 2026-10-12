@@ -21,7 +21,7 @@ local M = {}
 ---@field src_win integer The diff window the float was opened from.
 local state = nil ---@type CommentFloatState?
 
----Markdown lines for a whole thread — also the Telescope previewer content,
+---Markdown lines for a whole thread — also the fzf-lua previewer content,
 ---so the picker and the float always read the same.
 ---@param thread ReviewThread
 ---@return string[]
