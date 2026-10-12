@@ -155,6 +155,7 @@ end
 ---@field kind "+"|"-"
 ---@field lnum integer Line number on the side the line lives on.
 ---@field text string
+---@field entry FileEntry The panel entry whose patch holds the line.
 
 ---Walk unified-diff output and yield every +/- line with its source line
 ---number. Handles rename headers, `\ No newline` markers and -U0 output.
@@ -205,27 +206,29 @@ end
 ---@param view DiffView
 ---@param cb fun(changes: diffview.ChangedLine[])
 local function collect_changes(view, cb)
-  local groups = {} ---@type table<string, { args: string[], paths: string[] }>
+  local groups = {} ---@type table<string, { args: string[], paths: string[], entries: table<string, FileEntry> }>
   local order = {}
   local changes = {} ---@type diffview.ChangedLine[]
-  local known = {} ---@type table<string, boolean>
 
   for _, entry in ipairs(view_files(view)) do
-    known[entry.path] = true
     local args = entry_diff_args(entry)
     if args then
       local key = table.concat(args, "\0")
       if not groups[key] then
-        groups[key] = { args = args, paths = {} }
+        groups[key] = { args = args, paths = {}, entries = {} }
         order[#order + 1] = key
       end
       local g = groups[key]
+      g.entries[entry.path] = entry
       g.paths[#g.paths + 1] = entry.path
       if entry.oldpath and entry.oldpath ~= entry.path then
         g.paths[#g.paths + 1] = entry.oldpath
       end
     else
-      walk_patch(untracked_patch(entry), function(l) changes[#changes + 1] = l end)
+      walk_patch(untracked_patch(entry), function(l)
+        l.entry = entry
+        changes[#changes + 1] = l
+      end)
     end
   end
 
@@ -236,9 +239,10 @@ local function collect_changes(view, cb)
     local g = groups[key]
     git_diff(view.adapter, utils.vec_join(g.args, "-U0", "--", g.paths), function(lines)
       walk_patch(lines, function(l)
-        -- Only lines of files the panel actually lists (pathspec is a
-        -- prefix match: `dir` would also pull in `dir/other`).
-        if known[l.path] then changes[#changes + 1] = l end
+        -- Only lines of files this section lists (pathspec is a prefix
+        -- match: `dir` would also pull in `dir/other`).
+        l.entry = g.entries[l.path]
+        if l.entry then changes[#changes + 1] = l end
       end)
       pending = pending - 1
       if pending == 0 then
@@ -295,8 +299,9 @@ end
 
 --#region fzf-lua
 
--- fzf-lua's own field separator: renders as a space. Text that contains one
--- splits into more fields, so the last field of a row is matched open-ended.
+-- fzf-lua's own field separator: renders as a space. Text containing one
+-- splits into more fields: a free-text last field is matched open-ended
+-- (`2..`, `1,3..`), any other free-text field has it replaced by a space.
 local SEP = "\u{2002}"
 
 ---@param i integer
@@ -493,7 +498,7 @@ function M.pick_file(opts)
     items = files,
     fields = function(file)
       local status, path, rest = file_fields(file)
-      return status, path, vim.trim(rest)
+      return status, (path:gsub(SEP, " ")), vim.trim(rest)
     end,
     nth = "2",
     preview_title = function(file) return file.path end,
@@ -521,21 +526,13 @@ function M.pick_line(opts)
   end
   ---@cast view DiffView
 
-  local files_by_path = {} ---@type table<string, FileEntry>
-  for _, entry in ipairs(view_files(view)) do
-    files_by_path[entry.path] = files_by_path[entry.path] or entry
-  end
-
   collect_changes(view, function(changes)
     if #changes == 0 then
       utils.info("[diffview] No changed lines in this view.")
       return
     end
 
-    local function jump(l)
-      local entry = files_by_path[l.path]
-      if entry then goto_entry(view, entry, l.kind == "-" and "a" or "b", l.lnum) end
-    end
+    local function jump(l) goto_entry(view, l.entry, l.kind == "-" and "a" or "b", l.lnum) end
 
     if not pcall(require, "fzf-lua") then
       vim.ui.select(
@@ -552,7 +549,7 @@ function M.pick_line(opts)
       ["+"] = ansi("DiffviewUnifiedSignAdd", "+"),
       ["-"] = ansi("DiffviewUnifiedSignDel", "-"),
     }
-    local patch_cache = {} ---@type table<string, string[]>
+    local patch_cache = {} ---@type table<FileEntry, string[]>
 
     ---@param l diffview.ChangedLine
     ---@param lines string[]
@@ -568,11 +565,9 @@ function M.pick_line(opts)
       nth = "2..",
       preview_title = function(l) return l.path end,
       preview = function(l, show)
-        if patch_cache[l.path] then return show_at(l, patch_cache[l.path], show) end
-        local file = files_by_path[l.path]
-        if not file then return end
-        entry_patch(file, function(lines)
-          patch_cache[l.path] = lines
+        if patch_cache[l.entry] then return show_at(l, patch_cache[l.entry], show) end
+        entry_patch(l.entry, function(lines)
+          patch_cache[l.entry] = lines
           show_at(l, lines, show)
         end)
       end,
@@ -684,6 +679,8 @@ function M.pick_commit()
     items = hashes,
     -- Called again by fzf-lua's resume.
     contents = function(_, w)
+      -- An fzf closed before its rows still holds a pipe.
+      if write then write(nil) end
       write = w
       emit()
     end,
