@@ -10,9 +10,9 @@
 --   pick_commit() — fuzzy-find a commit (or mark several for a range) and open
 --                  it, rows coloured the way lazygit colours its commit list.
 --
--- Telescope when available (fzf-native if the user loaded it); vim.ui.select
--- otherwise so both work in a bare config. Loaded lazily from actions so
--- Telescope never loads until the first pick.
+-- fzf-lua when available; vim.ui.select otherwise so both work in a bare
+-- config. Loaded lazily from actions so fzf-lua never loads until the first
+-- pick.
 
 local lazy = require("diffview.lazy")
 
@@ -28,7 +28,6 @@ local trunk = lazy.require("diffview.trunk") ---@module "diffview.trunk"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
 local api = vim.api
-local pl = lazy.access(utils, "path") ---@type PathLib
 
 local M = {}
 
@@ -131,7 +130,7 @@ local function untracked_patch(entry)
   }
   for _, l in ipairs(content) do
     -- readfile() turns NUL bytes into "\n" inside an item: binary content has
-    -- no lines to list, and a "\n" in a row breaks Telescope and set_lines.
+    -- no lines to list, and a "\n" in a row breaks fzf and set_lines.
     if l:find("\n", 1, true) then
       return { out[1], ("Binary files /dev/null and b/%s differ"):format(entry.path) }
     end
@@ -258,11 +257,9 @@ end
 
 --#region display
 
-local ns_preview = api.nvim_create_namespace("diffview_picker_preview")
-
 ---@param entry FileEntry
----@return string
-local function file_label(entry)
+---@return string status, string path, string rest
+local function file_fields(entry)
   local stats = entry.stats or {}
   local counts = ""
   if stats.additions or stats.deletions then
@@ -271,26 +268,16 @@ local function file_label(entry)
   local kind = entry.kind == "staged" and " [staged]"
     or entry.kind == "conflicting" and " [conflict]"
     or ""
-  return ("%s %s%s%s"):format(entry.status or " ", entry.path, kind, counts)
+  return entry.status or " ", entry.path, vim.trim(kind .. counts)
 end
+
+---@param entry FileEntry
+---@return string
+local function file_label(entry) return vim.trim(table.concat({ file_fields(entry) }, " ")) end
 
 ---@param l diffview.ChangedLine
 ---@return string
 local function line_label(l) return ("%s:%d %s %s"):format(l.path, l.lnum, l.kind, vim.trim(l.text)) end
-
----Fill a preview buffer with a patch and highlight it as a diff.
----@param bufnr integer
----@param lines string[]
-local function show_patch(bufnr, lines)
-  if not api.nvim_buf_is_valid(bufnr) then return end
-  api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  local ok, putils = pcall(require, "telescope.previewers.utils")
-  if ok then
-    pcall(putils.highlighter, bufnr, "diff")
-  else
-    vim.bo[bufnr].filetype = "diff"
-  end
-end
 
 ---Row (1-indexed) in a patch that holds the given changed line.
 ---@param lines string[]
@@ -302,6 +289,97 @@ local function patch_row_of(lines, l)
     if not found and x.kind == l.kind and x.lnum == l.lnum then found = x.row end
   end)
   return found
+end
+
+--#endregion
+
+--#region fzf-lua
+
+-- fzf-lua's own field separator: renders as a space, never typed in text.
+local SEP = "\u{2002}"
+
+---@param i integer
+---@return string
+local function fzf_row(i, ...) return table.concat({ i, ... }, SEP) end
+
+---@param hl string
+---@param s string
+---@return string
+local function ansi(hl, s) return (require("fzf-lua.utils").ansi_from_hl(hl, s)) end
+
+---@class diffview.FzfPick
+---@field title string Label of the prompt box.
+---@field items any[]
+---@field fields? fun(item: any): ... Row text of an item, split into fzf fields.
+---@field contents? function fzf-lua content of `fzf_row`s, instead of `fields`.
+---@field nth? string Fields that matching sees (the index never is).
+---@field multi? boolean
+---@field enter_prefix? string fzf actions run on <CR> before accepting.
+---@field preview_title fun(item: any): string
+---@field preview fun(item: any, show: fun(lines: string[], ft: string, row?: integer))
+---@field on_select fun(items: any[]) Picked items in list order.
+
+---An fzf-lua picker over `o.items`. Every row leads with its item's index,
+---hidden and never matched, so the preview and <CR> map rows back to items.
+---The preview is a real buffer (fzf-lua's builtin previewer) that `o.preview`
+---fills, possibly later: a fill for a row the cursor has left is dropped.
+---@param o diffview.FzfPick
+function M.fzf_pick(o)
+  local function item_of(line) return o.items[tonumber(line:match("^%d+"))] end
+
+  local Previewer = require("fzf-lua.previewer.builtin").base:extend()
+  function Previewer:populate_preview_buf(entry_str)
+    local item = item_of(entry_str)
+    if not item then return end
+    local buf = self:get_tmp_buffer()
+    api.nvim_buf_set_lines(buf, 0, -1, false, { "…" })
+    self:set_preview_buf(buf)
+    self.win:update_preview_title(" " .. o.preview_title(item) .. " ")
+    o.preview(item, function(lines, ft, row)
+      if self.preview_bufnr ~= buf or not api.nvim_buf_is_valid(buf) then return end
+      api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      vim.bo[buf].filetype = ft
+      local win = self.win.preview_winid
+      if row and api.nvim_win_is_valid(win) then
+        api.nvim_win_set_cursor(win, { row, 0 })
+        api.nvim_win_call(win, function() vim.cmd("normal! zz") end)
+      end
+      self.win:update_preview_scrollbar()
+    end)
+  end
+
+  local contents = o.contents
+  if not contents then
+    contents = {}
+    for i, item in ipairs(o.items) do
+      contents[i] = fzf_row(i, o.fields(item))
+    end
+  end
+
+  require("fzf-lua").fzf_exec(contents, {
+    previewer = { _ctor = function() return Previewer end },
+    fzf_opts = {
+      ["--input-label"] = " " .. o.title .. " ",
+      ["--delimiter"] = SEP,
+      ["--with-nth"] = "2..",
+      ["--nth"] = o.nth,
+      ["--multi"] = o.multi,
+    },
+    actions = {
+      enter = {
+        prefix = o.enter_prefix,
+        fn = function(selected)
+          local index = {}
+          for _, line in ipairs(selected) do
+            index[#index + 1] = tonumber(line:match("^%d+"))
+          end
+          table.sort(index)
+          local picked = vim.tbl_map(function(i) return o.items[i] end, index)
+          if #picked > 0 then o.on_select(picked) end
+        end,
+      },
+    },
+  })
 end
 
 --#endregion
@@ -400,64 +478,30 @@ function M.pick_file(opts)
     return
   end
 
-  local has_telescope, pickers = pcall(require, "telescope.pickers")
-  if not has_telescope then
+  if not pcall(require, "fzf-lua") then
     vim.ui.select(files, { prompt = "Diff files", format_item = file_label }, function(choice)
       if choice then goto_entry(view, choice) end
     end)
     return
   end
 
-  local finders = require("telescope.finders")
-  local conf = require("telescope.config").values
-  local previewers = require("telescope.previewers")
-  local t_actions = require("telescope.actions")
-  local action_state = require("telescope.actions.state")
-
   local patch_cache = {} ---@type table<FileEntry, string[]>
 
-  pickers
-    .new({}, {
-      prompt_title = "Diff files",
-      finder = finders.new_table({
-        results = files,
-        entry_maker = function(entry)
-          return {
-            value = entry,
-            display = file_label(entry),
-            ordinal = entry.path,
-            path = entry.absolute_path,
-          }
-        end,
-      }),
-      sorter = conf.file_sorter({}),
-      previewer = previewers.new_buffer_previewer({
-        title = "Patch",
-        dyn_title = function(_, entry) return entry.value.path end,
-        define_preview = function(self, entry)
-          local file = entry.value ---@type FileEntry
-          local bufnr = self.state.bufnr
-          local cached = patch_cache[file]
-          if cached then return show_patch(bufnr, cached) end
-
-          api.nvim_buf_set_lines(bufnr, 0, -1, false, { "…" })
-          entry_patch(file, function(lines)
-            patch_cache[file] = lines
-            -- The previewer may have moved on to another entry meanwhile.
-            if self.state.bufnr == bufnr then show_patch(bufnr, lines) end
-          end)
-        end,
-      }),
-      attach_mappings = function(prompt_bufnr)
-        t_actions.select_default:replace(function()
-          local entry = action_state.get_selected_entry()
-          t_actions.close(prompt_bufnr)
-          if entry then goto_entry(view, entry.value) end
-        end)
-        return true
-      end,
-    })
-    :find()
+  M.fzf_pick({
+    title = "Diff files",
+    items = files,
+    fields = file_fields,
+    nth = "2",
+    preview_title = function(file) return file.path end,
+    preview = function(file, show)
+      if patch_cache[file] then return show(patch_cache[file], "diff") end
+      entry_patch(file, function(lines)
+        patch_cache[file] = lines
+        show(lines, "diff")
+      end)
+    end,
+    on_select = function(picked) goto_entry(view, picked[1]) end,
+  })
 end
 
 ---Fuzzy-find across every added / deleted line of the current diff and jump
@@ -489,8 +533,7 @@ function M.pick_line(opts)
       if entry then goto_entry(view, entry, l.kind == "-" and "a" or "b", l.lnum) end
     end
 
-    local has_telescope, pickers = pcall(require, "telescope.pickers")
-    if not has_telescope then
+    if not pcall(require, "fzf-lua") then
       vim.ui.select(
         changes,
         { prompt = "Changed lines", format_item = line_label },
@@ -501,92 +544,36 @@ function M.pick_line(opts)
       return
     end
 
-    local finders = require("telescope.finders")
-    local conf = require("telescope.config").values
-    local previewers = require("telescope.previewers")
-    local t_actions = require("telescope.actions")
-    local action_state = require("telescope.actions.state")
-    local entry_display = require("telescope.pickers.entry_display")
-
-    local displayer = entry_display.create({
-      separator = " ",
-      items = { { width = 1 }, { remaining = true } },
-    })
-
+    local signs = {
+      ["+"] = ansi("DiffviewUnifiedSignAdd", "+"),
+      ["-"] = ansi("DiffviewUnifiedSignDel", "-"),
+    }
     local patch_cache = {} ---@type table<string, string[]>
 
-    ---@param self table
     ---@param l diffview.ChangedLine
     ---@param lines string[]
-    local function show_at(self, l, lines)
-      local bufnr = self.state.bufnr
-      show_patch(bufnr, lines)
-      local row = patch_row_of(lines, l)
-      if row and api.nvim_win_is_valid(self.state.winid) then
-        api.nvim_buf_clear_namespace(bufnr, ns_preview, 0, -1)
-        api.nvim_buf_set_extmark(bufnr, ns_preview, row - 1, 0, {
-          end_row = row,
-          end_col = 0,
-          hl_group = "TelescopePreviewLine",
-          hl_eol = true,
-          strict = false,
-          priority = 60,
-        })
-        api.nvim_win_set_cursor(self.state.winid, { row, 0 })
-        api.nvim_win_call(self.state.winid, function() pcall(vim.cmd, "normal! zz") end)
-      end
-    end
+    ---@param show fun(lines: string[], ft: string, row?: integer)
+    local function show_at(l, lines, show) show(lines, "diff", patch_row_of(lines, l)) end
 
-    pickers
-      .new({}, {
-        prompt_title = "Changed lines",
-        finder = finders.new_table({
-          results = changes,
-          entry_maker = function(l)
-            local sign_hl = l.kind == "+" and "DiffviewUnifiedSignAdd" or "DiffviewUnifiedSignDel"
-            return {
-              value = l,
-              ordinal = ("%s %s:%d"):format(vim.trim(l.text), l.path, l.lnum),
-              display = function()
-                return displayer({
-                  { l.kind, sign_hl },
-                  ("%s:%d  %s"):format(l.path, l.lnum, vim.trim(l.text)),
-                })
-              end,
-              path = pl:absolute(l.path, view.adapter.ctx.toplevel),
-              lnum = l.lnum,
-            }
-          end,
-        }),
-        sorter = conf.generic_sorter({}),
-        previewer = previewers.new_buffer_previewer({
-          title = "Patch",
-          dyn_title = function(_, entry) return entry.value.path end,
-          define_preview = function(self, entry)
-            local l = entry.value ---@type diffview.ChangedLine
-            local bufnr = self.state.bufnr
-            local cached = patch_cache[l.path]
-            if cached then return show_at(self, l, cached) end
-
-            local file = files_by_path[l.path]
-            if not file then return end
-            api.nvim_buf_set_lines(bufnr, 0, -1, false, { "…" })
-            entry_patch(file, function(lines)
-              patch_cache[l.path] = lines
-              if self.state.bufnr == bufnr then show_at(self, l, lines) end
-            end)
-          end,
-        }),
-        attach_mappings = function(prompt_bufnr)
-          t_actions.select_default:replace(function()
-            local entry = action_state.get_selected_entry()
-            t_actions.close(prompt_bufnr)
-            if entry then jump(entry.value) end
-          end)
-          return true
-        end,
-      })
-      :find()
+    M.fzf_pick({
+      title = "Changed lines",
+      items = changes,
+      fields = function(l)
+        return signs[l.kind], ("%s:%d  %s"):format(l.path, l.lnum, vim.trim(l.text))
+      end,
+      nth = "2",
+      preview_title = function(l) return l.path end,
+      preview = function(l, show)
+        if patch_cache[l.path] then return show_at(l, patch_cache[l.path], show) end
+        local file = files_by_path[l.path]
+        if not file then return end
+        entry_patch(file, function(lines)
+          patch_cache[l.path] = lines
+          show_at(l, lines, show)
+        end)
+      end,
+      on_select = function(picked) jump(picked[1]) end,
+    })
   end)
 end
 
@@ -595,8 +582,8 @@ end
 ---
 ---Rows read like lazygit's commit list: the hash is green when the commit is
 ---on main, yellow when pushed but not on main, red when not pushed; then the
----author's initials in lazygit's colour for that author. The log streams in as
----before; the status comes from two small rev-lists started alongside it.
+---author's initials in lazygit's colour for that author. The status comes from
+---two small rev-lists started alongside the log.
 function M.pick_commit()
   local cwd = vim.fs.root(vim.uv.cwd(), ".git")
   if not cwd then
@@ -604,8 +591,7 @@ function M.pick_commit()
     return
   end
 
-  local has_telescope, pickers = pcall(require, "telescope.pickers")
-  if not has_telescope then
+  if not pcall(require, "fzf-lua") then
     vim.system(
       git_cmd(LOG_ARGS),
       { cwd = cwd, text = true },
@@ -626,108 +612,109 @@ function M.pick_commit()
     return
   end
 
-  local finders = require("telescope.finders")
-  local conf = require("telescope.config").values
-  local previewers = require("telescope.previewers")
-  local t_actions = require("telescope.actions")
-  local action_state = require("telescope.actions.state")
-  local entry_display = require("telescope.pickers.entry_display")
+  local hashes = {} ---@type string[]
+  local rows ---@type string[]?
+  local write ---@type fun(data?: string[])?
+  local log ---@type string[]?
+  local status ---@type { unmerged?: table<string, true>, unpushed?: table<string, true> }?
 
-  local picker
-  local status = { loaded = false } ---@type { loaded: boolean, unmerged?: table<string, true>, unpushed?: table<string, true> }
-  local drawn_early = false
-
-  -- Started before the picker so the sets usually land before the first row.
-  -- When they don't, the rows already drawn are redrawn with their colours.
-  load_commit_status(cwd, function(unmerged, unpushed)
-    status.loaded, status.unmerged, status.unpushed = true, unmerged, unpushed
-    local bufnr = picker and picker.results_bufnr
-    if not (drawn_early and picker.manager and bufnr and api.nvim_buf_is_valid(bufnr)) then
-      return
-    end
-    for index = 1, math.min(picker.manager:num_results(), picker.max_results) do
-      local entry = picker.manager:get_entry(index)
-      if entry then picker:entry_adder(index, entry, nil, false) end
-    end
-    picker:set_selection(picker:get_selection_row())
-  end)
+  local function emit()
+    if not (rows and write) then return end
+    write(rows)
+    write(nil)
+    write = nil
+  end
 
   ---@param hash string
-  ---@return string
+  ---@return string?
   local function hash_hl(hash)
-    if not status.loaded then
-      drawn_early = true
-      return "TelescopeResultsIdentifier"
-    end
-    if not (status.unmerged and status.unpushed) then return "TelescopeResultsIdentifier" end
+    if not (status.unmerged and status.unpushed) then return end
     if not status.unmerged[hash] then return "DiffviewCommitMerged" end
     return status.unpushed[hash] and "DiffviewCommitUnpushed" or "DiffviewCommitPushed"
   end
 
-  local displayer = entry_display.create({
-    separator = " ",
-    items = { { width = 8 }, { width = 2 }, { remaining = true } },
-  })
-
-  local function display(entry)
-    local author = authors.get(entry.author)
-    return displayer({
-      { entry.value:sub(1, 8), hash_hl(entry.value) },
-      { author.initials, author.hl },
-      entry.msg,
-    })
+  -- Every row waits for both the log and the status, so it is drawn once, in
+  -- its colour. Both start before the picker, so fzf's own startup overlaps
+  -- them.
+  local function build()
+    if not (log and status) then return end
+    local paint, author_cell = {}, {}
+    for _, hl in ipairs({ "DiffviewCommitMerged", "DiffviewCommitPushed", "DiffviewCommitUnpushed" }) do
+      paint[hl] = select(3, require("fzf-lua.utils").ansi_from_hl(hl, ""))
+    end
+    rows = {}
+    for _, line in ipairs(log) do
+      local hash, author, subject = parse_commit(line)
+      if hash then
+        if subject == "" then subject = "<empty commit message>" end
+        if not author_cell[author] then
+          local a = authors.get(author)
+          author_cell[author] =
+            ansi(a.hl, a.initials .. (" "):rep(2 - api.nvim_strwidth(a.initials)))
+        end
+        local short, p = hash:sub(1, 8), paint[hash_hl(hash)]
+        hashes[#hashes + 1] = hash
+        rows[#rows + 1] = fzf_row(#hashes, p and p(short) or short, author_cell[author], subject)
+      end
+    end
+    emit()
   end
 
-  local preview_opts = { cwd = cwd }
+  vim.system(
+    git_cmd(LOG_ARGS),
+    { cwd = cwd, text = true },
+    vim.schedule_wrap(function(out)
+      log = vim.split(out.stdout or "", "\n", { trimempty = true })
+      build()
+    end)
+  )
+  load_commit_status(cwd, function(unmerged, unpushed)
+    status = { unmerged = unmerged, unpushed = unpushed }
+    build()
+  end)
 
-  picker = pickers.new({}, {
-    prompt_title = "Git Commits",
-    finder = finders.new_oneshot_job(git_cmd(LOG_ARGS), {
-      cwd = cwd,
-      entry_maker = function(line)
-        local hash, author, subject = parse_commit(line)
-        if not hash then return end
-        if subject == "" then subject = "<empty commit message>" end
-        return {
-          value = hash,
-          -- The short hash only: 40 hex chars would let fuzzy queries match
-          -- inside hashes.
-          ordinal = hash:sub(1, 8) .. " " .. subject,
-          msg = subject,
-          author = author,
-          display = display,
-        }
-      end,
-    }),
-    sorter = conf.file_sorter({}),
-    previewer = {
-      previewers.git_commit_diff_to_parent.new(preview_opts),
-      previewers.git_commit_diff_to_head.new(preview_opts),
-      previewers.git_commit_diff_as_was.new(preview_opts),
-      previewers.git_commit_message.new(preview_opts),
-    },
-    attach_mappings = function(prompt_bufnr)
-      t_actions.select_default:replace(function()
-        local hovered = action_state.get_selected_entry()
-        local marked =
-          vim.list_extend({}, action_state.get_current_picker(prompt_bufnr):get_multi_selection())
-        -- Marking one commit with <Tab> and pressing <CR> on another means
-        -- "diff these two" — count the hovered one in.
-        if #marked <= 1 and hovered and not (marked[1] and marked[1].value == hovered.value) then
-          marked[#marked + 1] = hovered
-        end
-        t_actions.close(prompt_bufnr)
-        if #marked == 0 then return end
-        -- Newest first by list position: the log is --topo-order, so a commit
-        -- always sits above its ancestors. Commit dates can't order them — a
-        -- rebase stamps every rebased commit with the same second.
-        table.sort(marked, function(a, b) return a.index < b.index end)
-        open_commits(cwd, vim.tbl_map(function(entry) return entry.value end, marked))
-      end)
-      return true
+  local patch_cache = {} ---@type table<string, string[]>
+
+  M.fzf_pick({
+    title = "Git Commits",
+    items = hashes,
+    -- Called again by fzf-lua's resume.
+    contents = function(_, w)
+      write = w
+      emit()
     end,
+    -- The short hash and the subject only: 40 hex chars would let fuzzy
+    -- queries match inside hashes.
+    nth = "1,3",
+    multi = true,
+    -- Marking one commit with <Tab> and pressing <CR> on another means "diff
+    -- these two": with at most one marked, the hovered one counts in too.
+    enter_prefix = 'transform([ "$FZF_SELECT_COUNT" -gt 1 ] || echo select)',
+    preview_title = function(hash) return hash:sub(1, 8) end,
+    preview = function(hash, show)
+      if patch_cache[hash] then return show(patch_cache[hash], "diff") end
+      local cmd = git_cmd({
+        "show",
+        "--format=",
+        "--diff-merges=first-parent",
+        "--no-color",
+        "--no-ext-diff",
+        hash,
+      })
+      vim.system(
+        cmd,
+        { cwd = cwd, text = true },
+        vim.schedule_wrap(function(out)
+          patch_cache[hash] = vim.split(out.stdout or "", "\n", { trimempty = true })
+          show(patch_cache[hash], "diff")
+        end)
+      )
+    end,
+    -- Newest first by list position: the log is --topo-order, so a commit
+    -- always sits above its ancestors. Commit dates can't order them — a
+    -- rebase stamps every rebased commit with the same second.
+    on_select = function(picked) open_commits(cwd, picked) end,
   })
-  picker:find()
 end
 
 --#endregion

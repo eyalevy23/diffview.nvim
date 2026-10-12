@@ -1,5 +1,5 @@
 -- Thread picker: fuzzy-find a review thread across every file of the review
--- and jump to its card. Telescope when available (with a full-thread
+-- and jump to its card. fzf-lua when available (with a full-thread
 -- previewer); vim.ui.select otherwise, so the feature works in a bare config.
 -- Loaded lazily from comments/init so requiring it never cycles.
 
@@ -127,8 +127,7 @@ function M.pick(opts)
     end
   end
 
-  local has_telescope, pickers = pcall(require, "telescope.pickers")
-  if not has_telescope then
+  if not pcall(require, "fzf-lua") then
     vim.ui.select(threads, {
       prompt = "Review threads",
       format_item = thread_label,
@@ -138,42 +137,17 @@ function M.pick(opts)
     return
   end
 
-  local finders = require("telescope.finders")
-  local conf = require("telescope.config").values
-  local previewers = require("telescope.previewers")
-  local t_actions = require("telescope.actions")
-  local action_state = require("telescope.actions.state")
-
-  pickers
-    .new({}, {
-      prompt_title = "Review threads",
-      finder = finders.new_table({
-        results = threads,
-        entry_maker = function(thread)
-          local label = thread_label(thread)
-          return { value = thread, display = label, ordinal = label }
-        end,
-      }),
-      sorter = conf.generic_sorter({}),
-      previewer = previewers.new_buffer_previewer({
-        title = "Thread",
-        define_preview = function(self, entry)
-          -- Same content the reading float shows — one source of truth.
-          local lines = require("diffview.comments.float").lines(entry.value)
-          api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
-          vim.bo[self.state.bufnr].filetype = "markdown"
-        end,
-      }),
-      attach_mappings = function(prompt_bufnr)
-        t_actions.select_default:replace(function()
-          local entry = action_state.get_selected_entry()
-          t_actions.close(prompt_bufnr)
-          if entry then goto_thread(entry.value) end
-        end)
-        return true
-      end,
-    })
-    :find()
+  require("diffview.pickers").fzf_pick({
+    title = "Review threads",
+    items = threads,
+    fields = thread_label,
+    preview_title = function() return "Thread" end,
+    preview = function(thread, show)
+      -- Same content the reading float shows — one source of truth.
+      show(require("diffview.comments.float").lines(thread), "markdown")
+    end,
+    on_select = function(picked) goto_thread(picked[1]) end,
+  })
 end
 
 return M
