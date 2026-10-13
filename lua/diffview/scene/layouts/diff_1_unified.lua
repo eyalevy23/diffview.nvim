@@ -33,6 +33,8 @@ local uid_counter = 0
 
 ---@class Diff1Unified : Diff2
 ---@field main Window The single visible window (unified scratch buffer).
+---@field _file_mode_buf? integer The unified buffer shown as the whole file (gutter markers instead of -/+ rows); moving to another file resets it.
+---@field _diff_open_folds? { [1]: integer, [2]: integer }[] Gap folds open when the file view was entered, reopened on the way back.
 local Diff1Unified = oop.create_class("Diff1Unified", Diff2)
 
 Diff1Unified.name = "diff1_unified"
@@ -100,10 +102,23 @@ function Diff1Unified:winbar_for(path, st)
       out[i] = (icon_hl and ("%#" .. icon_hl .. "#") or "") .. icon .. "%#DiffviewWinBarFile#" .. name
     end
   end
-  local bar = " " .. table.concat(out, "%#DiffviewWinBarSep# › ")
+  local bar = " " .. table.concat(out, "%#DiffviewWinBarSep# › ") .. "%="
+  if st and st.file_mode then
+    bar = bar .. "%#DiffviewWinBarDir#file view "
+  end
   if st and st.n_add + st.n_del > 0 then
-    bar = bar .. ("%%=%%#DiffviewFilePanelInsertions#+%d %%#DiffviewFilePanelDeletions#-%d ")
-      :format(st.n_add, st.n_del)
+    -- A rounded pill (the statusline's own caps) keeps the counts legible at
+    -- the winbar's size; a zero side is left out, as in the file panel.
+    local counts = {}
+    if st.n_add > 0 then counts[#counts + 1] = ("%%#DiffviewWinBarPillAdd#+%d"):format(st.n_add) end
+    if st.n_del > 0 then counts[#counts + 1] = ("%%#DiffviewWinBarPillDel#-%d"):format(st.n_del) end
+    local body = table.concat(counts, "%#DiffviewWinBarPillAdd# ")
+    if hl.winbar_pill and conf.use_icons then
+      bar = bar .. "%#DiffviewWinBarPill#\u{e0b6}%#DiffviewWinBarPillAdd# " .. body
+        .. "%#DiffviewWinBarPillAdd# %#DiffviewWinBarPill#\u{e0b4} "
+    else
+      bar = bar .. body .. " "
+    end
   end
   return bar .. "%*"
 end
@@ -190,7 +205,9 @@ end
 ---@return boolean changed
 function Diff1Unified:_render()
   local file = self:_ensure_unified_buf()
-  local st, changed = unified.render(file.bufnr, self.a.file, self.b.file)
+  local st, changed = unified.render(file.bufnr, self.a.file, self.b.file, {
+    file_mode = self._file_mode_buf == file.bufnr,
+  })
   self:_watch_source()
   self:_watch_diagnostics(file.bufnr)
   return st, changed
@@ -244,6 +261,51 @@ function Diff1Unified:_refresh()
       utils.set_cursor(self.main.id, new_row, col)
     end
   end
+end
+
+---Toggle between the interleaved diff and the whole file with gitsigns-style
+---gutter markers. The cursor stays on its source line and at the same height
+---in the window; a deleted row maps to the next surviving line.
+function Diff1Unified:toggle_file_mode()
+  local file = self.main.file
+  local win = self.main.id
+  if not (self.main:is_valid() and file and file:is_valid()) then return end
+  if api.nvim_win_get_buf(win) ~= file.bufnr then return end
+
+  local row, col = unpack(api.nvim_win_get_cursor(win))
+  local screen_row = api.nvim_win_call(win, vim.fn.winline)
+  local lnum = unified.edit_target(file.bufnr, row)
+
+  local on = self._file_mode_buf ~= file.bufnr
+  if on and not (self.b.file and not self.b.file.nulled) then
+    utils.info("[diffview] The file is deleted on this side: there is no file to view.")
+    return
+  end
+  self._file_mode_buf = on and file.bufnr or nil
+  if on then
+    hl.update_file_sign_hl()
+    self._diff_open_folds = unified.open_fold_spans(win, file.bufnr)
+  end
+
+  local st = self:_render()
+  file.winbar = self:winbar_for(file.path, st)
+  if self.main:show_winbar_info() then
+    vim.wo[win].winbar = file.winbar
+  end
+  -- The file view's relative numbers (v:relnum) only redraw on cursor moves
+  -- while the window's own 'relativenumber' is set. Local only: vim.wo would
+  -- also overwrite the global value (it acts like :set for window options).
+  utils.set_local(win, { relativenumber = on and vim.go.relativenumber })
+  unified.apply_folds(win, file.bufnr, not on and self._diff_open_folds or nil)
+  if not on then self._diff_open_folds = nil end
+
+  local new_row = lnum and unified.row_for(file.bufnr, "b", lnum) or 1
+  api.nvim_win_call(win, function()
+    utils.set_cursor(win, new_row, col)
+    -- Back in the diff, the line may sit in a folded unchanged gap: open it.
+    pcall(vim.cmd, "normal! zv")
+    vim.fn.winrestview({ topline = math.max(1, new_row - (screen_row - 1)) })
+  end)
 end
 
 -- Trailing debounce for source-edit re-renders: the diff repaints once you
@@ -335,6 +397,8 @@ Diff1Unified.open_files = async.void(function(self)
   self.main.emitter:emit("pre_open")
 
   local file = self:_ensure_unified_buf()
+  -- File view is per visit: moving to another file returns to the diff.
+  if self._file_mode_buf ~= file.bufnr then self._file_mode_buf = nil end
   local win_is_new = api.nvim_win_get_buf(self.main.id) ~= file.bufnr
   local open_folds = unified.open_fold_spans(self.main.id, file.bufnr)
   local st, changed = self:_render()
@@ -357,7 +421,7 @@ Diff1Unified.open_files = async.void(function(self)
     scrollbind = false,
     cursorbind = false,
     number = false,
-    relativenumber = false,
+    relativenumber = self._file_mode_buf ~= nil and vim.go.relativenumber,
     foldmethod = "manual",
     foldenable = true,
     foldcolumn = "0",

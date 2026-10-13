@@ -45,8 +45,10 @@ local TS_BLOCK = 120
 ---@field tick_b? integer changedtick of buf_b at render time
 ---@field w_old integer gutter width for old line numbers
 ---@field w_new integer gutter width for new line numbers
----@field n_add integer added rows
----@field n_del integer deleted rows
+---@field n_add integer added lines
+---@field n_del integer deleted lines
+---@field file_mode? boolean Rendered as the whole new file with gutter change markers
+---@field change_signs? table<integer, "add"|"change"|"delete"|"topdelete"> file mode: row -> marker
 ---@field col_cache table<integer, string> memoized statuscolumn strings
 ---@field col_wrap? string statuscolumn for wrapped continuation rows
 ---@field col_blank? string statuscolumn for virtual (virt_lines) rows
@@ -147,14 +149,19 @@ end
 ---Compute the interleaved unified lines + line map from two line arrays.
 ---Also the engine behind the peek float (diffview/peek.lua), so a hunk reads
 ---the same there as in the view.
+---With `file_mode`, the rows are exactly the new side's lines (no deleted
+---rows, no folds); each hunk becomes a gitsigns-style marker instead.
 ---@param old_lines string[]
 ---@param new_lines string[]
+---@param file_mode? boolean
 ---@return string[] lines
 ---@return UnifiedState st (partially filled: maps, hunks, fold ranges)
 ---@return table hunks the vim.diff hunks (sorted by new position)
-function M.build(old_lines, new_lines)
-  local old_text = table.concat(old_lines, "\n") .. "\n"
-  local new_text = table.concat(new_lines, "\n") .. "\n"
+function M.build(old_lines, new_lines, file_mode)
+  -- A missing side (added/deleted file) is empty text, not one empty line:
+  -- "\n" would diff as a phantom blank line (a false `-1` on new files).
+  local old_text = #old_lines > 0 and table.concat(old_lines, "\n") .. "\n" or ""
+  local new_text = #new_lines > 0 and table.concat(new_lines, "\n") .. "\n" or ""
 
   local hunks = {}
   if old_text ~= new_text and (#old_lines > 0 or #new_lines > 0) then
@@ -168,6 +175,15 @@ function M.build(old_lines, new_lines)
       end
       table.sort(hunks, function(x, y) return x[3] < y[3] end)
     end
+  end
+
+  local n_add, n_del = 0, 0
+  for _, hunk in ipairs(hunks) do
+    n_del, n_add = n_del + hunk[2], n_add + hunk[4]
+  end
+
+  if file_mode then
+    return M.build_file(old_lines, new_lines, hunks, n_add, n_del)
   end
 
   local lines = {}
@@ -284,9 +300,8 @@ function M.build(old_lines, new_lines)
     visible_ranges = visible_ranges,
     w_old = math.max(1, #tostring(#old_lines)),
     w_new = math.max(1, #tostring(#new_lines)),
-    -- Every row is ctx, add or del; old = ctx + del, new = ctx + add.
-    n_add = #lines - #old_lines,
-    n_del = #lines - #new_lines,
+    n_add = n_add,
+    n_del = n_del,
     col_cache = {},
     ts_cache = {},
     ts_pending = {},
@@ -294,6 +309,79 @@ function M.build(old_lines, new_lines)
   }
 
   return lines, st, hunks
+end
+
+---File-mode build: the new side verbatim, one row per line, and a marker per
+---hunk where gitsigns would put one — added and changed lines get a bar, a
+---pure deletion marks the line above it (or the first line, at the top).
+---@param old_lines string[]
+---@param new_lines string[]
+---@param hunks table
+---@param n_add integer
+---@param n_del integer
+---@return string[] lines
+---@return UnifiedState st
+---@return table hunks
+function M.build_file(old_lines, new_lines, hunks, n_add, n_del)
+  local line_map, row_of_new, row_of_old = {}, {}, {}
+  local signs, hunk_rows = {}, {}
+
+  -- Map unchanged lines to their old numbers by walking the hunks.
+  local oi, ni = 1, 1
+  local function ctx_until(n_stop)
+    while ni < n_stop do
+      line_map[ni] = { kind = "ctx", old_lnum = oi, new_lnum = ni }
+      row_of_old[oi], row_of_new[ni] = ni, ni
+      oi, ni = oi + 1, ni + 1
+    end
+  end
+
+  for _, hunk in ipairs(hunks) do
+    local sa, ca, sb, cb = hunk[1], hunk[2], hunk[3], hunk[4]
+    if cb > 0 then
+      ctx_until(sb)
+      for k = sb, sb + cb - 1 do
+        line_map[k] = { kind = "add", new_lnum = k }
+        row_of_new[k] = k
+        signs[k] = ca > 0 and "change" or "add"
+      end
+      hunk_rows[#hunk_rows + 1] = sb
+      ni = sb + cb
+    else
+      -- Pure deletion after new line `sb` (0 = before the first line).
+      ctx_until(sb + 1)
+      local row = math.max(sb, 1)
+      if new_lines[row] then
+        signs[row] = sb == 0 and "topdelete" or "delete"
+        hunk_rows[#hunk_rows + 1] = row
+      end
+    end
+    -- vim.diff: a zero count's start is the line the change follows.
+    oi = ca > 0 and sa + ca or sa + 1
+  end
+  ctx_until(#new_lines + 1)
+
+  local st = {
+    line_map = line_map,
+    row_of_new = row_of_new,
+    row_of_old = row_of_old,
+    hunk_rows = hunk_rows,
+    fold_ranges = {},
+    fold_start = {},
+    visible_ranges = { { 1, #new_lines } },
+    w_old = 0,
+    w_new = math.max(1, #tostring(#new_lines)),
+    n_add = n_add,
+    n_del = n_del,
+    file_mode = true,
+    change_signs = signs,
+    col_cache = {},
+    ts_cache = {},
+    ts_pending = {},
+    ts_avail = {},
+  }
+
+  return vim.list_slice(new_lines), st, hunks
 end
 
 ---Apply persistent highlight extmarks: add/del line backgrounds + word-level
@@ -306,6 +394,9 @@ end
 ---@param new_lines string[]
 function M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
   api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+  -- File mode reads like the real buffer: the gutter markers are the only
+  -- change indication.
+  if st.file_mode then return end
 
   for _, hunk in ipairs(hunks) do
     local sa, ca, sb, cb = hunk[1], hunk[2], hunk[3], hunk[4]
@@ -381,13 +472,32 @@ function M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
   end
 end
 
+---Regex syntax for languages Treesitter can't color (no parser: zsh, many
+---config formats). The real buffer would use the filetype's syntax file, so
+---the rendered one does too; with a parser, the decoration provider colors
+---rows and regex syntax stays off. Interleaved deleted rows can make a
+---multi-line regex region (a heredoc) bleed — whole-file mode never does.
+---@param bufnr integer
+---@param src_buf? integer
+local function apply_regex_syntax(bufnr, src_buf)
+  local ft = src_buf and api.nvim_buf_is_valid(src_buf) and vim.bo[src_buf].filetype or ""
+  local syntax = ""
+  if ft ~= "" then
+    local ok, parser = pcall(vim.treesitter.get_parser, src_buf, nil, { error = false })
+    if not (ok and parser) then syntax = ft end
+  end
+  if vim.bo[bufnr].syntax ~= syntax then vim.bo[bufnr].syntax = syntax end
+end
+
 ---Render the unified diff of two source buffers into `bufnr`.
 ---@param bufnr integer The scratch buffer to render into.
 ---@param file_a? vcs.File Old side.
 ---@param file_b? vcs.File New side.
+---@param opts? { file_mode?: boolean } file_mode: the whole new file with gutter markers.
 ---@return UnifiedState st
 ---@return boolean changed False when the content was already up to date.
-function M.render(bufnr, file_a, file_b)
+function M.render(bufnr, file_a, file_b, opts)
+  local file_mode = (opts and opts.file_mode) or false
   local old_lines, buf_a = source_lines(file_a)
   local new_lines, buf_b = source_lines(file_b)
 
@@ -398,11 +508,12 @@ function M.render(bufnr, file_a, file_b)
   if prev
     and prev.buf_a == buf_a and prev.buf_b == buf_b
     and prev.tick_a == tick_a and prev.tick_b == tick_b
+    and (prev.file_mode or false) == file_mode
   then
     return prev, false
   end
 
-  local lines, st, hunks = M.build(old_lines, new_lines)
+  local lines, st, hunks = M.build(old_lines, new_lines, file_mode)
   st.buf_a, st.buf_b = buf_a, buf_b
   st.tick_a, st.tick_b = tick_a, tick_b
   if prev then st.diag_src, st.diag_min = prev.diag_src, prev.diag_min end
@@ -414,6 +525,7 @@ function M.render(bufnr, file_a, file_b)
   M.state[bufnr] = st
   M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
   M.paint_diagnostics(bufnr)
+  apply_regex_syntax(bufnr, buf_b or buf_a)
 
   -- Color the default-visible region up front (normal context — parser
   -- creation is not allowed during redraw). Rows inside folds fill lazily via
@@ -536,6 +648,35 @@ end
 
 --#region window decoration callbacks
 
+-- File-mode markers, as gitsigns draws them.
+local FILE_SIGNS = {
+  add = "%#DiffviewFileSignAdd#▎",
+  change = "%#DiffviewFileSignChange#▎",
+  delete = "%#DiffviewFileSignDelete#▁",
+  topdelete = "%#DiffviewFileSignDelete#▔",
+}
+
+---File-mode gutter: `%s num ▎` like a normal window's 'statuscolumn' — one
+---line number honoring the global 'relativenumber' (hybrid: the cursor row
+---absolute), then the change marker. Not memoized: relative numbers change
+---with every cursor move, and the string is a few concatenations.
+---@param st UnifiedState
+---@return string
+local function statuscol_file(st)
+  local width = math.max(st.w_new, vim.go.numberwidth - 1)
+  if vim.v.virtnum ~= 0 then return "%s" .. (" "):rep(width + 3) end
+
+  local lnum, relnum = vim.v.lnum, vim.v.relnum
+  local num, hl
+  if relnum == 0 then
+    num, hl = lnum, "DiffviewUnifiedNumCur"
+  else
+    num, hl = vim.go.relativenumber and relnum or lnum, "DiffviewUnifiedNumNew"
+  end
+  local s = tostring(num)
+  return ("%%s%%#%s#%s%s %s%%* "):format(hl, (" "):rep(width - #s), s, FILE_SIGNS[st.change_signs[lnum]] or " ")
+end
+
 ---'statuscolumn' callback: dual gutter `old new ±` with a leading sign slot.
 ---O(1) per line after the first visit (memoized per rendered row).
 ---Resolves the buffer from the window being drawn (g:statusline_winid), not
@@ -545,6 +686,7 @@ function M.statuscol()
   local buf = (win and win ~= 0) and api.nvim_win_get_buf(win) or api.nvim_get_current_buf()
   local st = M.state[buf]
   if not st then return "" end
+  if st.file_mode then return statuscol_file(st) end
 
   -- Non-buffer screen rows keep the gutter width but not the numbers:
   -- wrapped continuation rows get a wrap marker in the marker slot (the text
@@ -653,7 +795,8 @@ function M.paint_diagnostics(bufnr)
 
   for _, d in ipairs(vim.diagnostic.get(src, { severity = { min = st.diag_min } })) do
     local row = st.row_of_new[d.lnum + 1]
-    if row and st.line_map[row].kind == "add" then
+    -- File mode shows the whole file, so every line's diagnostics belong.
+    if row and (st.file_mode or st.line_map[row].kind == "add") then
       local one_line = d.end_lnum == d.lnum
       api.nvim_buf_set_extmark(bufnr, ns_diag, row - 1, d.col, {
         end_row = one_line and row - 1 or row,

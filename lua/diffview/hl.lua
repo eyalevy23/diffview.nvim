@@ -617,6 +617,69 @@ local function word_hl(name, band, accents, fallback)
   end
 end
 
+---File-mode gutter markers: the user's gitsigns colors when gitsigns is
+---around, so the diff's whole-file view reads like a real buffer. Re-run when
+---file mode opens: gitsigns often loads after diffview, so a group first
+---linked to the fallback is moved over once GitSigns* exists. A group the
+---user defined themselves is left alone.
+function M.update_file_sign_hl()
+  for name, targets in pairs({
+    FileSignAdd = { "GitSignsAdd", "diffAdded" },
+    FileSignChange = { "GitSignsChange", "diffChanged" },
+    FileSignDelete = { "GitSignsDelete", "diffRemoved" },
+  }) do
+    local group = "Diffview" .. name
+    local cur = api.nvim_get_hl(0, { name = group, link = true })
+    if vim.tbl_isempty(cur) or cur.link == targets[2] then
+      local target = vim.fn.hlexists(targets[1]) == 1 and targets[1] or targets[2]
+      api.nvim_set_hl(0, group, { link = target })
+    end
+  end
+end
+
+---Whether the winbar counts are drawn as a pill (a surface color exists).
+M.winbar_pill = false
+
+---The winbar's `+N -M` pill: bold counts on a raised surface (Normal's fg
+---nudged into its bg, like the comment cards), with rounded caps drawn in the
+---surface color. A transparent Normal has no bg to nudge: the theme's
+---CursorLine surface stands in. Without any, plain bold counts and no caps —
+---caps with no surface between them read as two stray brackets.
+function M.update_winbar_hl()
+  local fg = M.get_fg("Normal", true)
+  local bg = M.get_bg("Normal", true)
+  local surface = M.blend(fg, bg, 0.12) or M.get_bg({ "CursorLine", "Visual" })
+  M.winbar_pill = surface ~= nil
+  local add = M.get_fg({ "DiffviewFilePanelInsertions", "Added", "@diff.plus", "GitSignsAdd" })
+  local del = M.get_fg({ "DiffviewFilePanelDeletions", "Removed", "@diff.minus", "GitSignsDelete" })
+
+  if not (surface and add and del) then
+    M.winbar_pill = false
+    for name, spec in pairs({
+      WinBarPillAdd = { fg = add, style = "bold" },
+      WinBarPillDel = { fg = del, style = "bold" },
+    }) do
+      if spec.fg then
+        spec.explicit, spec.default = true, true
+        M.hi("Diffview" .. name, spec)
+      end
+    end
+    M.hi_link("DiffviewWinBarPillAdd", "DiffviewFilePanelInsertions", { default = true })
+    M.hi_link("DiffviewWinBarPillDel", "DiffviewFilePanelDeletions", { default = true })
+    return
+  end
+
+  for name, spec in pairs({
+    WinBarPill = { fg = surface },
+    WinBarPillAdd = { fg = add, bg = surface, style = "bold" },
+    WinBarPillDel = { fg = del, bg = surface, style = "bold" },
+  }) do
+    spec.explicit = true
+    spec.default = true
+    M.hi("Diffview" .. name, spec)
+  end
+end
+
 function M.update_diff_hl()
   local fg = M.get_hl_attr("DiffDelete", hlattr.x_fg, true) or "NONE"
   local bg = M.get_hl_attr("DiffDelete", hlattr.x_bg, true) or "NONE"
@@ -624,6 +687,8 @@ function M.update_diff_hl()
 
   M.hi("DiffviewDiffAddAsDelete", { fg = fg, bg = bg, style = style })
   M.hi_link("DiffviewDiffDeleteDim", "Comment", { default = true })
+
+  M.update_file_sign_hl()
 
   word_hl("DiffviewDiffAddText", "DiffviewDiffAdd", { "diffAdded", "@diff.plus", "Added" }, "DiffviewDiffText")
   word_hl("DiffviewDiffDeleteText", "DiffviewDiffDelete", { "diffRemoved", "@diff.minus", "Removed" }, "DiffviewDiffText")
@@ -641,6 +706,7 @@ function M.setup()
 
   M.update_diff_hl()
   M.update_comment_hl()
+  M.update_winbar_hl()
 end
 
 return M

@@ -45,7 +45,8 @@ M.MODES = { "index", "branch", "blame" }
 ---@field path string Repo-relative path.
 ---@field lnum integer Cursor line in the source buffer.
 ---@field lang string?
----@field src_buf integer
+---@field src_buf integer The buffer the cursor is in (and the float follows).
+---@field lines_buf? integer Where the file's text and colors come from, when not src_buf.
 ---@field src_win integer
 
 ---@class PeekCommit
@@ -230,14 +231,23 @@ end
 ---@return PeekCtx?
 ---@return string? err
 local function resolve_ctx(bufnr, winid)
+  -- A unified diff in file view shows the working-tree file row for row, so
+  -- it peeks like the real file: text and colors come from the real buffer,
+  -- the cursor and the float stay in the diff window.
+  local lines_buf
   if vim.bo[bufnr].buftype ~= "" then
-    if unified.state[bufnr] then
-      return nil, "Peek works in the real file: press T to open it first."
+    local st = unified.state[bufnr]
+    local real = st and st.buf_b
+    if st and st.file_mode and real and api.nvim_buf_is_valid(real) and vim.bo[real].buftype == "" then
+      lines_buf = real
+    elseif st then
+      return nil, "Peek works in the file view (gm) of working-tree changes, or in the real file (T)."
+    else
+      return nil, "Peek works in real file buffers."
     end
-    return nil, "Peek works in real file buffers."
   end
 
-  local name = api.nvim_buf_get_name(bufnr)
+  local name = api.nvim_buf_get_name(lines_buf or bufnr)
   if name == "" then return nil, "Unnamed buffer." end
   local abs = pl:absolute(name)
 
@@ -245,7 +255,7 @@ local function resolve_ctx(bufnr, winid)
   if err then return nil, err end
   ---@cast adapter GitAdapter
 
-  local ft = vim.bo[bufnr].filetype
+  local ft = vim.bo[lines_buf or bufnr].filetype
   local lang = ft ~= "" and vim.treesitter.language.get_lang(ft) or nil
 
   return {
@@ -257,6 +267,7 @@ local function resolve_ctx(bufnr, winid)
     lnum = api.nvim_win_get_cursor(winid)[1],
     lang = lang,
     src_buf = bufnr,
+    lines_buf = lines_buf,
     src_win = winid,
   }
 end
@@ -264,7 +275,7 @@ end
 ---@param ctx PeekCtx
 ---@return string[]
 local function buf_lines(ctx)
-  return api.nvim_buf_get_lines(ctx.src_buf, 0, -1, false)
+  return api.nvim_buf_get_lines(ctx.lines_buf or ctx.src_buf, 0, -1, false)
 end
 
 ---The request is still what the user is looking at.
@@ -298,7 +309,7 @@ local function load_index(ctx, cb)
       base = nil,
       old_lines = old,
       new_lines = buf_lines(ctx),
-      new_buf = ctx.src_buf,
+      new_buf = ctx.lines_buf or ctx.src_buf,
       -- Blame the index content as if it were the working tree: line numbers
       -- match exactly, and staged-but-uncommitted lines read as such.
       old_blame = { path = ctx.path, contents = join_lines(old) },
@@ -353,7 +364,7 @@ local function load_rev(ctx, sha, label, rev_arg, cb)
       base = rev_arg,
       old_lines = old,
       new_lines = buf_lines(ctx),
-      new_buf = ctx.src_buf,
+      new_buf = ctx.lines_buf or ctx.src_buf,
       old_blame = { rev = sha, path = ctx.path },
       target = { side = "b", lnum = ctx.lnum },
     })

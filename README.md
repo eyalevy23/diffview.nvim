@@ -21,7 +21,8 @@ Highlights of this fork:
   diff highlights, Treesitter colors, folded unchanged regions, and `T` to jump
   to the real file for editing. `]c` / `[c` run through the hunks of every
   file in turn, and the working-tree file's LSP errors and warnings show on
-  the added lines.
+  the added lines. `gm` flips to a **file view**: the whole file as it reads
+  in a normal buffer, with gitsigns-style change markers in the gutter.
 - **Peek (`:DiffviewPeek`):** in any real file, a float showing what the line
   looked like before — vs the index, vs the branch base, or the commit that
   last touched it, with one-key walking through its history.

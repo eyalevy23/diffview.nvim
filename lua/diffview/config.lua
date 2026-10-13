@@ -195,8 +195,9 @@ M.defaults = {
       { "n", "g?", actions.help({ "view", "diff1" }), { desc = "Open the help panel" } },
     },
     diff2 = {
-      -- Mappings in 2-way diff layouts
+      -- Mappings in 2-way diff layouts (the unified and inline layouts)
       { "n", "g?", actions.help({ "view", "diff2" }), { desc = "Open the help panel" } },
+      { "n", "gm", actions.toggle_file_view,          { desc = "Toggle file view: whole file, change markers in the gutter" } },
     },
     diff3 = {
       -- Mappings in 3-way diff layouts

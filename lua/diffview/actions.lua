@@ -363,6 +363,16 @@ function M.prev_hunk()
   unified_hunk_nav(-1)
 end
 
+---Unified diff: toggle between the interleaved diff and the whole file with
+---gitsigns-style gutter markers (resets when you move to another file).
+function M.toggle_file_view()
+  local view = lib.get_current_view()
+  local layout = view and view.cur_layout
+  if layout and layout.toggle_file_mode then
+    layout:toggle_file_mode()
+  end
+end
+
 ---Reply to the comment thread on the cursor line, or start a new one.
 function M.comment_open()
   require("diffview.comments").comment_open()
@@ -939,6 +949,17 @@ do
     end
   end
 
+  -- The everyday ones are listed in the help panel (and which-key) under a
+  -- common "Fold:" prefix, so they sort together; the rest stay unlisted.
+  local listed = {
+    za = "Fold: toggle the fold under the cursor",
+    zo = "Fold: open the fold under the cursor",
+    zc = "Fold: close the fold under the cursor",
+    zR = "Fold: open all (show every unchanged line)",
+    zM = "Fold: close all (back to the changes only)",
+    zv = "Fold: open just enough to show the cursor line",
+  }
+
   for _, fold_cmd in ipairs({
     "za", "zA", "ze", "zE", "zo", "zc", "zO", "zC", "zr", "zm", "zR", "zM",
     "zv", "zx", "zX", "zn", "zN", "zi",
@@ -947,7 +968,7 @@ do
       "n",
       fold_cmd,
       compat_fold(fold_cmd),
-      { desc = "diffview_ignore" },
+      { desc = listed[fold_cmd] or "diffview_ignore" },
     })
   end
 end

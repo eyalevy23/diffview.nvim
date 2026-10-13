@@ -490,6 +490,27 @@ view.x.layout                                   *diffview-config-view.x.layout*
                     `]c` / `[c`   Jump to the next / previous hunk; past the
                               last / first hunk of a file, continue into
                               the next / previous file.
+                    `gm`        Toggle the file view (see below).
+                    `zo` / `zc` / `za`  Open / close / toggle the fold under
+                              the cursor; `zR` / `zM` open / close all
+                              folds. Listed under "Fold:" in `g?`.
+
+                                                *diffview-unified-file-view*
+                `gm` switches the window to the FILE VIEW: the new side of
+                the file exactly as it is, unfolded, with no red/green line
+                backgrounds — changes are marked in the gutter the way
+                gitsigns marks them (`▎` added or changed, `▁` lines deleted
+                below, `▔` deleted at the top), using your `GitSigns*`
+                colors when gitsigns is installed. The gutter shows one line
+                number, relative when 'relativenumber' is set globally.
+                Deleted lines are not shown; `gm` again returns to the diff.
+                The cursor keeps its line and its height in the window both
+                ways. The file view is per visit: moving to another file
+                shows the diff again. `]c` / `[c` jump between the markers.
+
+                Files whose language has no Treesitter parser (zsh, many
+                config formats) are colored with the filetype's regex syntax
+                instead, as in a normal buffer.
 
                 The buffer is read-only by design: editing happens in the
                 real file via `T`, and the view re-renders live whenever the
