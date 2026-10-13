@@ -175,7 +175,8 @@ function M.goto_file_tab()
 end
 
 ---In a unified diff buffer: open the real file for editing, at the source
----line mapped from the cursor line. Falls back to `goto_file_edit` in other
+---line mapped from the cursor line, in a new tab — so `:q` returns to the diff
+---without closing anything else. Falls back to `goto_file_edit` in other
 ---layouts.
 function M.jump_to_edit()
   local view = lib.get_current_view()
@@ -213,21 +214,15 @@ function M.jump_to_edit()
   local cursor = api.nvim_win_get_cursor(main.id)
   local target = unified.edit_target(buf, cursor[1]) or 1
 
-  local target_tab = lib.get_prev_non_view_tabpage()
+  -- Always a new tab of its own — never another tab's window: `:q` there
+  -- would close a tab you never meant to touch.
+  vim.cmd("tabnew")
+  local temp_bufnr = api.nvim_get_current_buf()
+  file.layout:restore_winopts()
+  vim.cmd("keepalt edit " .. vim.fn.fnameescape(file.absolute_path))
 
-  if target_tab then
-    api.nvim_set_current_tabpage(target_tab)
-    file.layout:restore_winopts()
-    vim.cmd("edit " .. vim.fn.fnameescape(file.absolute_path))
-  else
-    vim.cmd("tabnew")
-    local temp_bufnr = api.nvim_get_current_buf()
-    file.layout:restore_winopts()
-    vim.cmd("keepalt edit " .. vim.fn.fnameescape(file.absolute_path))
-
-    if temp_bufnr ~= api.nvim_get_current_buf() then
-      api.nvim_buf_delete(temp_bufnr, { force = true })
-    end
+  if temp_bufnr ~= api.nvim_get_current_buf() then
+    api.nvim_buf_delete(temp_bufnr, { force = true })
   end
 
   utils.set_cursor(0, target, cursor[2])

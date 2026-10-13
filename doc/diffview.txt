@@ -1124,6 +1124,9 @@ jump_to_edit                                    *diffview-actions-jump_to_edit*
         position in the diff. Mainly useful in the single window layouts
         (|diffview-unified|), where the diff buffer itself is read-only.
 
+        The file opens in a new tab, never in another tab's window, so
+        closing it (`:q`) returns to the diff.
+
 jumpto_conflict({num}, {use_delta})             *diffview-actions-jumpto_conflict*
         Contexts: `diff_view`, `file_panel`
 
