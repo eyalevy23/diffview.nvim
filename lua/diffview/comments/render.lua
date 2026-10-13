@@ -460,6 +460,9 @@ local function build_box(thread, width, outdated, max_rows, span)
       if rl then
         label[#label + 1] = { (" · replaces lines %d–%d"):format(rl[1] or 0, rl[2] or 0), "DiffviewCommentDim" }
       end
+      if comment.suggestion.declined_at then
+        label[#label + 1] = { " · declined", "DiffviewCommentOutdated" }
+      end
       lines[#lines + 1] = close_line(label)
       raw_shown = raw_shown + 1
 

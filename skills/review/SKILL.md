@@ -20,6 +20,11 @@ human's comments.
 2. Reply in-thread with `review_reply`. If the fix is concrete, attach a
    `suggestion` (exact replacement lines) — the human applies it with one
    keypress; prefer suggestions over prose for mechanical changes.
+   `replace_lines` are line numbers in the file on disk now (the working
+   tree), even on threads anchored to a commit; the lines they cover are
+   recorded, and applying patches the working-tree file wherever those lines
+   are by then. A thread whose last comment is "Declined the suggestion."
+   means the human said no — answer it, don't re-send the same suggestion.
 3. If you were asked to change code and you did it directly, say so in the
    reply and mark the thread with `review_set_status` (applied).
 4. Resolving threads is the human's call — never yours. Never re-litigate

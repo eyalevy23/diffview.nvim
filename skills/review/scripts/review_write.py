@@ -99,7 +99,10 @@ def main():
                 die(1, "ops file %s is not valid JSON: %s" % (ops_file, e))
 
         ops = payload.get("ops") if isinstance(payload, dict) else payload
-        print(json.dumps(core.write_ops(path, ops)))
+        # With an explicit --review-file the cwd may be anywhere: only record
+        # replaced lines when the review file was derived from this repo.
+        root = core.derive_toplevel() if review_path is None else None
+        print(json.dumps(core.write_ops(path, ops, root)))
     except core.ReviewError as e:
         die(e.code, e.message)
 

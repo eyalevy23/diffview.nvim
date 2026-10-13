@@ -110,7 +110,7 @@ npx skills add eyalevy23/diffview.nvim
 | `<leader>gcd` | Delete the thread (`<leader>gcu` or `:DiffviewReview undo` restores it) |
 | `<leader>gcu` | Undo the last delete |
 | `<leader>gcr` | Toggle resolved |
-| `<leader>gca` | Apply the suggestion to the file |
+| `<leader>gca` | Preview the suggestion against your working-tree file, from any view (also commits and staged files): `↵` apply, `e` edit first in a new tab, `x` decline, `q` close |
 | `<leader>gcn` / `<leader>gcp` | Next / previous thread |
 | `<leader>gcD` | Delete ALL threads (asks first) |
 

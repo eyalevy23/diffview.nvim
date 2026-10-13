@@ -77,7 +77,7 @@ SUGGESTION = {
         "properties": {
             "replace_lines": {
                 "type": "array", "items": {"type": "integer"},
-                "description": "[first, last] 1-indexed inclusive line range in the anchored file at comment time",
+                "description": "[first, last] 1-indexed inclusive line range in the file as it is on disk now (the working tree), whatever revision the thread is anchored to",
             },
             "text": {"type": "string", "description": "Replacement text (newline separated)"},
         },
@@ -164,7 +164,7 @@ def handle_tool(name, args):
     if args.get("suggestion") is not None and op["op"] in ("add_thread", "add_comment"):
         op["suggestion"] = args["suggestion"]
 
-    return core.write_ops(path, [op])
+    return core.write_ops(path, [op], core.derive_toplevel(args.get("repo")))
 
 
 def send(payload):

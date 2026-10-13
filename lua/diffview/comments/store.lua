@@ -33,6 +33,8 @@ M.last_written = {}
 ---@class ReviewSuggestion
 ---@field replace_lines { [1]: integer, [2]: integer } 1-indexed inclusive range in the anchored file
 ---@field text string Replacement text (newline separated)
+---@field original? string The exact lines it replaces, captured when written (newline separated)
+---@field declined_at? string ISO-8601 UTC: the human declined it
 
 ---@class ReviewComment
 ---@field id string
@@ -147,7 +149,7 @@ local KEY_ORDER = {
   path = 20, side = 21, rev = 22, line = 23, end_line = 24,
   snippet = 25, ctx_before = 26, ctx_after = 27,
   author = 30, ts = 31, body = 32, suggestion = 33, edited_at = 34,
-  replace_lines = 40, text = 41,
+  replace_lines = 40, text = 41, original = 42, declined_at = 43,
   summary = 50,
 }
 

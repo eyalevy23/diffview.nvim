@@ -474,7 +474,8 @@ local function author_name()
 end
 
 ---Open a floating markdown input. `<C-s>` submits, `q`/<Esc> cancels.
----@param opts { title: string, initial?: string, on_submit: fun(text: string) }
+---`allow_empty` submits an empty text too (an optional reason).
+---@param opts { title: string, initial?: string, allow_empty?: boolean, on_submit: fun(text: string) }
 local function open_input(opts)
   local buf = api.nvim_create_buf(false, true)
   vim.bo[buf].filetype = "markdown"
@@ -513,7 +514,7 @@ local function open_input(opts)
   local function submit()
     local text = vim.trim(table.concat(api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
     close()
-    if text ~= "" then opts.on_submit(text) end
+    if text ~= "" or opts.allow_empty then opts.on_submit(text) end
   end
 
   for _, mode in ipairs({ "n", "i" }) do
@@ -926,76 +927,68 @@ function M.comment_resolve()
   })
 end
 
----Apply the latest suggestion of the thread at the cursor to the real file.
+---Apply the pending suggestion of the thread at the cursor — always to the
+---working-tree file, from any view. Opens a preview first; see
+---comments/apply.lua.
 function M.comment_apply()
   local bufnr = api.nvim_get_current_buf()
   local ctx = ctx_for(bufnr)
   if not ctx then return end
 
-  local row = api.nvim_win_get_cursor(0)[1]
-  local thread = thread_at(bufnr, row)
+  local thread = thread_at(bufnr, api.nvim_win_get_cursor(0)[1])
   if not thread then return end
 
-  local suggestion
-  for i = #thread.comments, 1, -1 do
-    if thread.comments[i].suggestion then
-      suggestion = thread.comments[i].suggestion
-      break
-    end
-  end
-  if not (suggestion and suggestion.replace_lines) then
-    utils.warn("[diffview] No suggestion on this thread.")
-    return
-  end
+  require("diffview.comments.apply").open(thread, ctx.store_path, ctx.adapter.ctx.toplevel)
+end
 
-  -- Applying writes to buf_b, so it must be the real working-tree file — in a
-  -- commit range view (e.g. main...HEAD) it's a read-only commit buffer.
-  if thread.anchor.side ~= "b" then
-    utils.warn("[diffview] Can only apply suggestions anchored to the new side.")
-    return
-  end
-  if ctx.rev_b ~= "WORKING" then
-    utils.warn("[diffview] Suggestions can only be applied in a working-tree view (:DiffviewOpen).")
-    return
-  end
-
-  local buf = ctx.buf_b
-  if not (buf and api.nvim_buf_is_valid(buf)) then return end
-
-  local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
-  local res = anchor_mod.resolve(thread.anchor, lines)
-  if res.outdated then
-    utils.warn("[diffview] Thread is outdated — can't locate the target lines.")
-    return
-  end
-
-  -- The suggestion range was recorded against the file at comment time;
-  -- shift it by however far the anchor has drifted since.
-  local offset = res.line - thread.anchor.line
-  local first = suggestion.replace_lines[1] + offset
-  local last = suggestion.replace_lines[2] + offset
-
-  if first < 1 or last > #lines or first > last then
-    utils.warn("[diffview] Suggestion range no longer valid.")
-    return
-  end
-
-  local new_lines = vim.split(suggestion.text, "\n", { plain = true })
-  api.nvim_buf_set_lines(buf, first - 1, last, false, new_lines)
-  api.nvim_buf_call(buf, function()
-    vim.cmd("silent noautocmd write")
-  end)
-
-  M.update(ctx.store_path, function(doc)
+---Mark a thread applied (its suggestion is in the file).
+---@param store_path string
+---@param thread_id string
+function M.mark_applied(store_path, thread_id)
+  M.update(store_path, function(doc)
     for _, t in ipairs(doc.threads) do
-      if t.id == thread.id then
+      if t.id == thread_id then
         t.status = "applied"
         t.updated_at = store.now()
       end
     end
   end)
+end
 
-  api.nvim_exec_autocmds("BufWritePost", { buffer = buf })
+---Decline a suggestion: the thread stays open with your reply (an optional
+---reason), so the AI sees it in its queue, and the suggestion is flagged so
+---apply no longer offers it.
+---@param store_path string
+---@param thread_id string
+---@param comment_id string The comment carrying the suggestion.
+function M.decline_suggestion(store_path, thread_id, comment_id)
+  open_input({
+    title = "Decline suggestion · reason (optional)",
+    allow_empty = true,
+    on_submit = function(text)
+      M.update(store_path, function(doc)
+        for _, t in ipairs(doc.threads) do
+          if t.id == thread_id then
+            for _, c in ipairs(t.comments) do
+              if c.id == comment_id and c.suggestion then
+                c.suggestion.declined_at = store.now()
+              end
+            end
+            t.comments[#t.comments + 1] = {
+              id = store.gen_id("c"),
+              author = author_name(),
+              ts = store.now(),
+              body = "Declined the suggestion." .. (text ~= "" and ("\n\n" .. text) or ""),
+            }
+            t.status = "open"
+            t.updated_at = store.now()
+          end
+        end
+      end, {
+        on_success = function() utils.info("[diffview] Suggestion declined.") end,
+      })
+    end,
+  })
 end
 
 ---Delete every comment thread in the repo's review store, after confirming.

@@ -981,8 +981,9 @@ close_fold                                      *diffview-actions-close_fold*
 comment_apply                                   *diffview-actions-comment_apply*
         Contexts: `diff_view`
 
-        Apply the suggestion block of the comment thread on the current line
-        to the real file. See |diffview-comments|.
+        Preview the suggestion block of the comment thread on the current
+        line against your working-tree file, from any view, then apply,
+        edit first, or decline it. See |diffview-comments-apply|.
 
 comment_open                                    *diffview-actions-comment_open*
         Contexts: `diff_view`
@@ -1512,8 +1513,9 @@ T                       Open the real file for editing at the line mapped
 <leader>gcr             Toggle resolved on the comment thread under the
                         cursor.
 
-<leader>gca             Apply the suggestion of the comment thread under the
-                        cursor to the real file.
+<leader>gca             Preview the suggestion of the comment thread under the
+                        cursor and apply it to your working-tree file (from
+                        any view). See |diffview-comments-apply|.
 
 <leader>gcd             Delete the comment thread under the cursor.
 
@@ -1668,6 +1670,34 @@ threads survive edits to the file (drift re-anchoring).
 A comment can carry a suggestion block (a proposed replacement for the
 anchored lines). The suggestion can be applied to the real file with a
 single key.
+
+                                                *diffview-comments-apply*
+Applying always targets your WORKING-TREE file — never the revision the diff
+shows — so it works the same from every view: uncommitted changes, staged
+files, the branch diff, a single commit, file history. The suggestion records
+the exact lines it replaces, and those are found in the current file by
+content (nearest to the comment's line when they occur more than once). If
+they changed since, nothing is offered: the reason is shown instead.
+
+`<leader>gca` (or `a` in the thread float) opens a preview of the change
+against the current file:
+
+        `↵`   Apply and save. The thread becomes applied. If the file's
+            buffer already had unsaved edits, the change is applied but
+            not saved, and the thread becomes applied when you save.
+        `e`   Open the file in a new tab with the change applied, unsaved.
+            Saving marks the thread applied. Leaving it without saving
+            drops the change again — unless you edited it further: your
+            edits are never thrown away, they stay unsaved in the buffer.
+        `x`   Decline, with an optional reason: your reply is added and the
+            thread stays open (so the AI picks it up). Apply then offers
+            nothing on that thread until a new suggestion arrives.
+        `q`   Close; nothing is recorded.
+
+Only the newest suggestion of a thread is ever applied. A replaced block
+that occurs more than once in the file (`end`, `}`, a blank line) is only
+applied where the comment's line says it must be; otherwise apply refuses
+rather than guess.
 
 Default mappings in the view:
 
