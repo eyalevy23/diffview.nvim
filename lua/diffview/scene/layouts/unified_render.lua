@@ -45,6 +45,8 @@ local TS_BLOCK = 120
 ---@field tick_b? integer changedtick of buf_b at render time
 ---@field w_old integer gutter width for old line numbers
 ---@field w_new integer gutter width for new line numbers
+---@field n_add integer added rows
+---@field n_del integer deleted rows
 ---@field col_cache table<integer, string> memoized statuscolumn strings
 ---@field col_wrap? string statuscolumn for wrapped continuation rows
 ---@field col_blank? string statuscolumn for virtual (virt_lines) rows
@@ -269,6 +271,8 @@ function M.build(old_lines, new_lines)
       fold_ranges[#fold_ranges + 1] = { pos, #lines }
     end
   end
+  local fold_start = {}
+  for _, r in ipairs(fold_ranges) do fold_start[r[1]] = true end
 
   local st = {
     line_map = line_map,
@@ -276,9 +280,13 @@ function M.build(old_lines, new_lines)
     row_of_old = row_of_old,
     hunk_rows = hunk_rows,
     fold_ranges = fold_ranges,
+    fold_start = fold_start,
     visible_ranges = visible_ranges,
     w_old = math.max(1, #tostring(#old_lines)),
     w_new = math.max(1, #tostring(#new_lines)),
+    -- Every row is ctx, add or del; old = ctx + del, new = ctx + add.
+    n_add = #lines - #old_lines,
+    n_del = #lines - #new_lines,
     col_cache = {},
     ts_cache = {},
     ts_pending = {},
@@ -363,7 +371,7 @@ function M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
           if range[2] > range[1] then
             api.nvim_buf_set_extmark(bufnr, ns, row - 1, range[1], {
               end_col = range[2],
-              hl_group = "DiffviewDiffText",
+              hl_group = "DiffviewDiffAddText",
               priority = 51,
             })
           end
@@ -470,19 +478,58 @@ function M.slice(st, first, last)
   return sub
 end
 
+---Old-side line spans of the gap folds the user has open in a window. Call
+---BEFORE a re-render: replacing the buffer content drops every manual fold,
+---and rows shift, so open folds are remembered by the source lines they
+---cover (gaps are unchanged lines, so every fold row has an old_lnum).
+---@param winid integer
+---@param bufnr integer
+---@return { [1]: integer, [2]: integer }[] spans
+function M.open_fold_spans(winid, bufnr)
+  local st = M.state[bufnr]
+  local spans = {}
+  if not st or not api.nvim_win_is_valid(winid) or api.nvim_win_get_buf(winid) ~= bufnr then
+    return spans
+  end
+
+  api.nvim_win_call(winid, function()
+    for _, range in ipairs(st.fold_ranges) do
+      local first, last = st.line_map[range[1]], st.line_map[range[2]]
+      if first and last and first.old_lnum and last.old_lnum and vim.fn.foldclosed(range[1]) == -1 then
+        spans[#spans + 1] = { first.old_lnum, last.old_lnum }
+      end
+    end
+  end)
+  return spans
+end
+
 ---Fold the unchanged gaps in a window displaying a rendered buffer.
 ---@param winid integer
 ---@param bufnr integer
-function M.apply_folds(winid, bufnr)
+---@param keep_open? { [1]: integer, [2]: integer }[] From open_fold_spans(): gaps overlapping these stay open.
+function M.apply_folds(winid, bufnr, keep_open)
   local st = M.state[bufnr]
   if not st or not api.nvim_win_is_valid(winid) or api.nvim_win_get_buf(winid) ~= bufnr then
     return
+  end
+
+  ---@param range { [1]: integer, [2]: integer }
+  local function was_open(range)
+    local first, last = st.line_map[range[1]], st.line_map[range[2]]
+    if not (keep_open and first and last and first.old_lnum and last.old_lnum) then return false end
+    for _, span in ipairs(keep_open) do
+      if first.old_lnum <= span[2] and last.old_lnum >= span[1] then return true end
+    end
+    return false
   end
 
   api.nvim_win_call(winid, function()
     pcall(vim.cmd, "norm! zE")
     for _, range in ipairs(st.fold_ranges) do
       pcall(vim.cmd, ("%d,%dfold"):format(range[1], range[2]))
+      if was_open(range) then
+        pcall(vim.cmd, ("%dfoldopen"):format(range[1]))
+      end
     end
   end)
 end
@@ -518,8 +565,26 @@ function M.statuscol()
   end
 
   local lnum = vim.v.lnum
+  -- A closed gap fold: its first row's numbers would read as the whole
+  -- gap's, so the gutter shows a quiet ellipsis instead.
+  -- (foldclosed() reads the CURRENT window; the drawn one may not be it.)
+  if st.fold_start and st.fold_start[lnum]
+    and api.nvim_win_call(win ~= 0 and win or 0, function() return vim.fn.foldclosed(lnum) end) == lnum
+  then
+    if not st.col_fold then
+      st.col_fold = ("%%s%%#DiffviewUnifiedFoldIcon#%s⋯%%* ")
+        :format((" "):rep(st.w_old + st.w_new + 2))
+    end
+    return st.col_fold
+  end
+
   local cached = st.col_cache[lnum]
-  if cached then return cached end
+  if cached then
+    -- The cursor row's numbers stand out, as with CursorLineNr in a normal
+    -- window ('cursorline' redraws the old and new rows on cursor moves).
+    if vim.v.relnum == 0 then return (cached:gsub("UnifiedNum%a+#", "UnifiedNumCur#")) end
+    return cached
+  end
 
   local info = st.line_map[lnum]
   if not info then return "" end
@@ -541,12 +606,15 @@ function M.statuscol()
   local col = ("%%s%%#DiffviewUnifiedNumOld#%s %%#DiffviewUnifiedNumNew#%s %s%%* ")
     :format(old_s, new_s, marker)
   st.col_cache[lnum] = col
+  if vim.v.relnum == 0 then return (col:gsub("UnifiedNum%a+#", "UnifiedNumCur#")) end
   return col
 end
 
----'foldtext' callback: "··· N unchanged lines ···" (fillchars 'fold' pads).
+---'foldtext' callback: "N unchanged lines" as a virt-text chunk (nvim 0.10+),
+---so it carries its own quiet highlight instead of 'Folded'.
 function M.foldtext()
-  return ("─── ··· %d unchanged lines ··· "):format(vim.v.foldend - vim.v.foldstart + 1)
+  local n = vim.v.foldend - vim.v.foldstart + 1
+  return { { ("%d unchanged line%s"):format(n, n == 1 and "" or "s"), "DiffviewUnifiedFold" } }
 end
 
 --#endregion

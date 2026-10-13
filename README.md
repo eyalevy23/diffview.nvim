@@ -99,13 +99,15 @@ npx skills add eyalevy23/diffview.nvim
 
 | Key | Action |
 |-----|--------|
-| `<CR>` | Reply to the thread on the line, or start a new one |
-| `E` | Read the thread in a scrollable float (toggles; long cards truncate inline at `comments.max_card_height` rows). Inside the float: `↵`/`r` reply, `e` edit, `a` apply, `s` resolve, `q` close |
+| `<CR>` | Reply to the thread on the line, or start a new one. In visual mode: comment on the selected lines |
+| `E` | Read the thread in a scrollable float (toggles; long cards truncate inline at `comments.max_card_height` rows). Inside the float: `↵`/`r` reply, `e` edit the comment under the cursor, `d` delete it, `D` delete the thread, `u` undo, `a` apply, `s` resolve, `q` close |
 | `]t` / `[t` | Next / previous thread |
 | `]r` / `[r` | Next / previous thread awaiting your reply (the AI spoke last), across files |
 | `<leader>gcq` | Pick among the threads awaiting your reply (`:DiffviewReview awaiting`) |
 | `<leader>gcc` | Reply / new comment |
-| `<leader>gce` | Edit your own comment |
+| `<leader>gce` | Edit your latest comment on the thread |
+| `<leader>gcd` | Delete the thread (`<leader>gcu` or `:DiffviewReview undo` restores it) |
+| `<leader>gcu` | Undo the last delete |
 | `<leader>gcr` | Toggle resolved |
 | `<leader>gca` | Apply the suggestion to the file |
 | `<leader>gcn` / `<leader>gcp` | Next / previous thread |

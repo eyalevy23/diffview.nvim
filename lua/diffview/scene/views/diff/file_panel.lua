@@ -26,6 +26,8 @@ local FilePanel = oop.create_class("FilePanel", Panel)
 
 FilePanel.winopts = vim.tbl_extend("force", Panel.winopts, {
   cursorline = true,
+  -- No `~` column under the file list.
+  fillchars = "eob: ",
   winhl = {
     "EndOfBuffer:DiffviewEndOfBuffer",
     "Normal:DiffviewNormal",

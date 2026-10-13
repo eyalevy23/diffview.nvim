@@ -412,6 +412,12 @@ DiffView.update_files = debounce.debounce_trailing(
 
     perf:lap("received new file list")
 
+    -- The selected file, remembered so the selection can follow it when it
+    -- moves between lists (staged/unstaged as a whole) instead of falling
+    -- back to a neighbor.
+    local selected = self.panel.cur_file
+    local selected_path, selected_kind = selected and selected.path, selected and selected.kind
+
     local files = {
       { cur_files = self.files.conflicting, new_files = new_files.conflicting },
       { cur_files = self.files.working, new_files = new_files.working },
@@ -511,6 +517,18 @@ DiffView.update_files = debounce.debounce_trailing(
 
     if utils.vec_indexof(self.panel:ordered_file_list(), self.panel.cur_file) == -1 then
       self.panel:set_cur_file(nil)
+    end
+
+    -- The selected file left its list: if it now lives in another one (it
+    -- was staged or unstaged whole), follow it there. Not out of the
+    -- conflict list: a resolved conflict hands over to the next conflict.
+    if selected and selected_kind ~= "conflicting" and self.panel.cur_file ~= selected then
+      for _, file in self.files:iter() do
+        if file.path == selected_path and file.kind ~= selected_kind then
+          self.panel:set_cur_file(file)
+          break
+        end
+      end
     end
 
     -- Set initially selected file

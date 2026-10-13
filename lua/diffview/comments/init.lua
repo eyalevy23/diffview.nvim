@@ -183,7 +183,22 @@ local function place_threads(bufnr)
       end
 
       if row then
-        placed[#placed + 1] = { thread = thread, row = row, outdated = res.outdated }
+        -- A range thread spans its side's rows line..end_line (rows of the
+        -- other side may interleave); the card sits under the last one.
+        local rows = { row }
+        for lnum = res.line + 1, res.end_line do
+          local r = unified.row_for(bufnr, a.side, lnum)
+          if r and r > rows[#rows] then rows[#rows + 1] = r end
+        end
+        placed[#placed + 1] = {
+          thread = thread,
+          row = row,
+          end_row = rows[#rows],
+          rows = rows,
+          line = res.line,
+          end_line = res.end_line,
+          outdated = res.outdated,
+        }
       end
     end
   end
@@ -502,12 +517,12 @@ local function open_input(opts)
   end
 
   for _, mode in ipairs({ "n", "i" }) do
-    vim.keymap.set(mode, "<C-s>", submit, { buffer = buf, nowait = true })
+    vim.keymap.set(mode, "<C-s>", submit, { buffer = buf, nowait = true, desc = "Comment: submit" })
   end
   -- Normal-mode <CR> submits too (insert-mode <CR> stays a newline).
-  vim.keymap.set("n", "<CR>", submit, { buffer = buf, nowait = true })
-  vim.keymap.set("n", "q", close, { buffer = buf, nowait = true })
-  vim.keymap.set("n", "<Esc>", close, { buffer = buf, nowait = true })
+  vim.keymap.set("n", "<CR>", submit, { buffer = buf, nowait = true, desc = "Comment: submit" })
+  vim.keymap.set("n", "q", close, { buffer = buf, nowait = true, desc = "Comment: cancel" })
+  vim.keymap.set("n", "<Esc>", close, { buffer = buf, nowait = true, desc = "Comment: cancel" })
 
   if opts.initial and opts.initial ~= "" then
     api.nvim_win_set_cursor(win, { api.nvim_buf_line_count(buf), 0 })
@@ -517,21 +532,69 @@ local function open_input(opts)
   end
 end
 
----Find the thread rendered at (or covering) a buffer row.
+---Find the thread rendered at (or covering) a buffer row. A row inside a
+---range thread counts — any of its lines (or the row of its card) acts on it.
 ---@param bufnr integer
 ---@param row integer
 ---@return ReviewThread?
 local function thread_at(bufnr, row)
+  local covering
   for _, p in ipairs(place_threads(bufnr)) do
     if p.row == row then return p.thread end
+    if not covering and vim.tbl_contains(p.rows, row) then
+      covering = p.thread
+    end
   end
+  return covering
 end
 
----<CR>: reply to the thread on this line, or start a new one.
+---The source span a range of rendered rows comments on: the new side when
+---any row has a new-side line (context/added), else the old side (a run of
+---deleted lines). Rows of the other side inside the range are skipped.
+---@param bufnr integer
+---@param first integer
+---@param last integer
+---@return ("a"|"b")? side
+---@return integer? line
+---@return integer? end_line
+local function span_for_rows(bufnr, first, last)
+  local min_new, max_new, min_old, max_old
+  for r = first, last do
+    local info = unified.get_line_info(bufnr, r)
+    if info and info.new_lnum then
+      min_new = math.min(min_new or info.new_lnum, info.new_lnum)
+      max_new = math.max(max_new or info.new_lnum, info.new_lnum)
+    elseif info and info.old_lnum then
+      min_old = math.min(min_old or info.old_lnum, info.old_lnum)
+      max_old = math.max(max_old or info.old_lnum, info.old_lnum)
+    end
+  end
+  if min_new then return "b", min_new, max_new end
+  if min_old then return "a", min_old, max_old end
+end
+
+---<CR>: reply to the thread on this line, or start a new one. From visual
+---mode, start a new thread on the selected lines (a range comment).
 function M.comment_open()
   local bufnr = api.nvim_get_current_buf()
   local ctx = ctx_for(bufnr)
   if not ctx then return end
+
+  local mode = api.nvim_get_mode().mode
+  if mode == "v" or mode == "V" or mode == "\22" then
+    local first, last = vim.fn.line("v"), vim.fn.line(".")
+    if first > last then first, last = last, first end
+    -- An end on a closed gap fold would anchor the card inside the fold,
+    -- hidden: trim the selection to the visible rows around it.
+    if vim.fn.foldclosed(last) ~= -1 then last = vim.fn.foldclosed(last) - 1 end
+    if vim.fn.foldclosed(first) ~= -1 then first = vim.fn.foldclosedend(first) + 1 end
+    if first > last then
+      api.nvim_feedkeys(api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+      return
+    end
+    api.nvim_feedkeys(api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+    return M.comment_new(bufnr, first, last)
+  end
 
   local row = api.nvim_win_get_cursor(0)[1]
   local existing = thread_at(bufnr, row)
@@ -564,24 +627,32 @@ function M.comment_open()
     return
   end
 
-  local info = unified.get_line_info(bufnr, row)
-  if not info then return end
+  M.comment_new(bufnr, row, row)
+end
 
-  local side = info.kind == "del" and "a" or "b"
-  local src_lnum = side == "a" and info.old_lnum or info.new_lnum
+---Start a new thread on the rendered rows first..last of a unified buffer.
+---@param bufnr integer
+---@param first integer
+---@param last integer
+function M.comment_new(bufnr, first, last)
+  local ctx = ctx_for(bufnr)
+  if not ctx then return end
+
+  local side, src_lnum, end_lnum = span_for_rows(bufnr, first, last)
   local src_buf = side == "a" and ctx.buf_a or ctx.buf_b
-  if not (src_lnum and src_buf and api.nvim_buf_is_valid(src_buf)) then return end
+  if not (side and src_buf and api.nvim_buf_is_valid(src_buf)) then return end
 
   local src_lines = api.nvim_buf_get_lines(src_buf, 0, -1, false)
   local rev = side == "a" and ctx.rev_a or ctx.rev_b
+  local where = end_lnum > src_lnum and ("%d–%d"):format(src_lnum, end_lnum) or tostring(src_lnum)
 
   open_input({
-    title = ("New comment · %s:%d"):format(ctx.path, src_lnum),
+    title = ("New comment · %s:%s"):format(ctx.path, where),
     on_submit = function(text)
       M.update(ctx.store_path, function(doc)
         doc.threads[#doc.threads + 1] = {
           id = store.gen_id("t"),
-          anchor = anchor_mod.make(ctx.path, side, rev, src_lnum, src_lnum, src_lines),
+          anchor = anchor_mod.make(ctx.path, side, rev, src_lnum, end_lnum, src_lines),
           status = "open",
           created_at = store.now(),
           updated_at = store.now(),
@@ -599,26 +670,26 @@ function M.comment_open()
   })
 end
 
----Edit your own latest comment on the thread at the cursor line.
-function M.comment_edit()
-  local bufnr = api.nvim_get_current_buf()
-  local ctx = ctx_for(bufnr)
-  if not ctx then return end
-
-  local row = api.nvim_win_get_cursor(0)[1]
-  local existing = thread_at(bufnr, row)
-  if not existing then return end
-
+---Edit one of your own comments. `comment_id` picks it (the reading float
+---passes the comment under its cursor); without one, your latest comment on
+---the thread is edited.
+---@param store_path string
+---@param thread ReviewThread
+---@param comment_id? string
+function M.edit_comment(store_path, thread, comment_id)
   local me = author_name()
   local target
-  for i = #existing.comments, 1, -1 do
-    if existing.comments[i].author == me then
-      target = existing.comments[i]
+  for i = #thread.comments, 1, -1 do
+    local c = thread.comments[i]
+    if (not comment_id or c.id == comment_id) and c.author == me then
+      target = c
       break
     end
   end
   if not target then
-    utils.warn("[diffview] No comment of yours to edit here.")
+    utils.warn(comment_id
+      and "[diffview] You can only edit your own comments."
+      or "[diffview] No comment of yours to edit here.")
     return
   end
 
@@ -626,12 +697,13 @@ function M.comment_edit()
     title = ("Edit · %s"):format(target.id),
     initial = target.body,
     on_submit = function(text)
-      M.update(ctx.store_path, function(doc)
+      M.update(store_path, function(doc)
         for _, t in ipairs(doc.threads) do
-          if t.id == existing.id then
+          if t.id == thread.id then
             for _, c in ipairs(t.comments) do
               if c.id == target.id and c.author == me then
                 c.body = text
+                c.edited_at = store.now()
                 t.updated_at = store.now()
               end
             end
@@ -646,6 +718,162 @@ function M.comment_edit()
     end,
   })
 end
+
+---Edit your own latest comment on the thread at the cursor line.
+function M.comment_edit()
+  local bufnr = api.nvim_get_current_buf()
+  local ctx = ctx_for(bufnr)
+  if not ctx then return end
+
+  local existing = thread_at(bufnr, api.nvim_win_get_cursor(0)[1])
+  if not existing then return end
+
+  M.edit_comment(ctx.store_path, existing, nil)
+end
+
+--#region delete + undo
+
+---Session-local undo stack of deletions per store path. Each entry restores
+---either a whole thread or a single comment at its old position.
+---@type table<string, ({ thread: ReviewThread, index: integer }|{ thread_id: string, comment: ReviewComment, index: integer })[]>
+local trash = {}
+
+local UNDO_HINT = "<leader>gcu to undo"
+
+---@param store_path string
+---@param entry table
+local function push_trash(store_path, entry)
+  trash[store_path] = trash[store_path] or {}
+  table.insert(trash[store_path], entry)
+  -- A session's worth of mistakes, not an archive.
+  if #trash[store_path] > 50 then table.remove(trash[store_path], 1) end
+end
+
+---Delete a whole thread (any author's: it's your review).
+---@param store_path string
+---@param thread_id string
+function M.delete_thread(store_path, thread_id)
+  local removed
+  M.update(store_path, function(doc)
+    for i, t in ipairs(doc.threads) do
+      if t.id == thread_id then
+        removed = { thread = t, index = i }
+        table.remove(doc.threads, i)
+        break
+      end
+    end
+  end, {
+    on_success = function()
+      if not removed then return end
+      push_trash(store_path, removed)
+      local n = #removed.thread.comments
+      utils.info(("[diffview] Deleted thread %s (%d comment%s) · %s."):format(
+        thread_id, n, n == 1 and "" or "s", UNDO_HINT))
+    end,
+  })
+end
+
+---Delete one comment of a thread. Deleting the only comment deletes the
+---thread — an empty thread has nothing left to anchor a conversation.
+---@param store_path string
+---@param thread ReviewThread
+---@param comment_id string
+function M.delete_comment(store_path, thread, comment_id)
+  if #thread.comments <= 1 then
+    return M.delete_thread(store_path, thread.id)
+  end
+
+  local removed
+  M.update(store_path, function(doc)
+    for _, t in ipairs(doc.threads) do
+      if t.id == thread.id then
+        for i, c in ipairs(t.comments) do
+          if c.id == comment_id then
+            removed = { thread_id = t.id, comment = c, index = i }
+            table.remove(t.comments, i)
+            t.updated_at = store.now()
+            break
+          end
+        end
+      end
+    end
+  end, {
+    on_success = function()
+      if not removed then return end
+      push_trash(store_path, removed)
+      utils.info(("[diffview] Deleted comment by %s · %s."):format(removed.comment.author, UNDO_HINT))
+    end,
+  })
+end
+
+---Delete the thread at the cursor line.
+function M.comment_delete()
+  local bufnr = api.nvim_get_current_buf()
+  local ctx = ctx_for(bufnr)
+  if not ctx then return end
+
+  local existing = thread_at(bufnr, api.nvim_win_get_cursor(0)[1])
+  if not existing then
+    utils.warn("[diffview] No comment thread on this line.")
+    return
+  end
+
+  M.delete_thread(ctx.store_path, existing.id)
+end
+
+---Restore the most recent deletion of this session.
+---@param store_path? string Defaults to the current view's review.
+function M.comment_undo(store_path)
+  if not store_path then
+    local view = lib.get_current_view()
+    if not (view and view.adapter) then
+      utils.err("[diffview] Open a diffview first.")
+      return
+    end
+    store_path = store.path_for(view.adapter)
+  end
+
+  local stack = trash[store_path]
+  local entry = stack and table.remove(stack)
+  if not entry then
+    utils.info("[diffview] Nothing to undo.")
+    return
+  end
+
+  local restored = false
+  M.update(store_path, function(doc)
+    if entry.thread then
+      for _, t in ipairs(doc.threads) do
+        if t.id == entry.thread.id then return end -- already back
+      end
+      table.insert(doc.threads, math.min(entry.index, #doc.threads + 1), entry.thread)
+      restored = true
+    else
+      for _, t in ipairs(doc.threads) do
+        if t.id == entry.thread_id then
+          table.insert(t.comments, math.min(entry.index, #t.comments + 1), entry.comment)
+          t.updated_at = store.now()
+          restored = true
+        end
+      end
+    end
+  end, {
+    on_success = function()
+      if restored then
+        utils.info(entry.thread
+          and ("[diffview] Restored thread %s."):format(entry.thread.id)
+          or "[diffview] Restored the comment.")
+      else
+        utils.warn("[diffview] Can't restore: its thread no longer exists.")
+      end
+    end,
+    on_fail = function()
+      table.insert(stack, entry) -- keep it for another try
+    end,
+  })
+end
+
+--#endregion
 
 ---E: read the thread at the cursor in a scrollable float (toggles). With no
 ---thread under the cursor the key stays honest and replays the builtin
@@ -678,15 +906,24 @@ function M.comment_resolve()
   local existing = thread_at(bufnr, row)
   if not existing then return end
 
+  local new_status
   M.update(ctx.store_path, function(doc)
     for _, t in ipairs(doc.threads) do
       if t.id == existing.id then
         t.status = t.status == "open" and "resolved" or "open"
         t.resolved_reason = t.status == "resolved" and "manual" or nil
         t.updated_at = store.now()
+        new_status = t.status
       end
     end
-  end)
+  end, {
+    on_success = function()
+      if new_status then
+        api.nvim_echo({ { ("[diffview] %s %s"):format(
+          new_status == "open" and "Reopened" or "Resolved", existing.id) } }, false, {})
+      end
+    end,
+  })
 end
 
 ---Apply the latest suggestion of the thread at the cursor to the real file.
@@ -827,7 +1064,13 @@ end
 
 --#region commands + global wiring
 
-local function cmd_review(cmd_opts)
+---Subcommands of :DiffviewReview (also its completion list).
+M.SUBCOMMANDS = { "list", "pick", "awaiting", "undo", "reload", "clear", "resolve-all", "setup", "uninstall" }
+
+---The :DiffviewReview handler. Registered from plugin/diffview.lua so it
+---exists from startup (`setup` must work before any diff was ever opened).
+---@param cmd_opts table
+function M.command(cmd_opts)
   local sub = cmd_opts.fargs[1] or "list"
 
   -- Global subcommands — no diffview required.
@@ -848,6 +1091,8 @@ local function cmd_review(cmd_opts)
   if sub == "reload" then
     M.reload()
     utils.info("[diffview] Review reloaded from disk.")
+  elseif sub == "undo" then
+    M.comment_undo(path)
   elseif sub == "pick" then
     M.comment_pick()
   elseif sub == "awaiting" then
@@ -869,8 +1114,10 @@ local function cmd_review(cmd_opts)
     local doc = M.get_doc(path)
     local out = { ("review: %s"):format(path) }
     for _, t in ipairs(doc.threads) do
-      out[#out + 1] = ("  [%s] %s %s:%d (%d comment(s))"):format(
-        store.awaiting_human(t) and "awaiting you" or t.status, t.id, t.anchor.path, t.anchor.line, #t.comments)
+      local a = t.anchor
+      local where = a.end_line > a.line and ("%d-%d"):format(a.line, a.end_line) or tostring(a.line)
+      out[#out + 1] = ("  [%s] %s %s:%s (%d comment(s))"):format(
+        store.awaiting_human(t) and "awaiting you" or t.status, t.id, a.path, where, #t.comments)
     end
     if doc.review.summary then
       out[#out + 1] = "  summary: " .. doc.review.summary
@@ -908,11 +1155,6 @@ function M.init()
         vim.schedule(function() M.refresh_buf(bufnr) end)
       end
     end,
-  })
-
-  api.nvim_create_user_command("DiffviewReview", cmd_review, {
-    nargs = "?",
-    complete = function() return { "list", "pick", "awaiting", "reload", "clear", "resolve-all", "setup", "uninstall" } end,
   })
 
   -- One-line, once-per-session nudge when the AI side isn't wired: opt-in

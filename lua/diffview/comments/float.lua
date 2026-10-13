@@ -19,17 +19,27 @@ local M = {}
 ---@field thread_id string
 ---@field store_path string
 ---@field src_win integer The diff window the float was opened from.
+---@field spans CommentSpan[] Which float lines show which comment.
 local state = nil ---@type CommentFloatState?
+
+---@class CommentSpan
+---@field first integer 1-indexed first float line of the comment
+---@field last integer
+---@field comment_id string
 
 ---Markdown lines for a whole thread — also the fzf-lua previewer content,
 ---so the picker and the float always read the same.
 ---@param thread ReviewThread
----@return string[]
+---@return string[] lines
+---@return CommentSpan[] spans
 function M.lines(thread)
+  local a = thread.anchor
+  local where = (a.end_line and a.end_line > a.line) and ("%d–%d"):format(a.line, a.end_line) or tostring(a.line)
   local lines = {
-    ("# %s:%d  [%s]"):format(thread.anchor.path, thread.anchor.line, thread.status),
+    ("# %s:%s  [%s]"):format(a.path, where, thread.status),
     "",
   }
+  local spans = {}
 
   -- Fence suggestions with the anchored file's filetype so markdown injection
   -- highlights them as code.
@@ -38,7 +48,8 @@ function M.lines(thread)
 
   for ci, c in ipairs(thread.comments) do
     if ci > 1 then lines[#lines + 1] = "---" end
-    lines[#lines + 1] = ("**%s** · %s"):format(c.author, c.ts or "")
+    local first = #lines + 1
+    lines[#lines + 1] = ("**%s** · %s%s"):format(c.author, c.ts or "", c.edited_at and " · _edited_" or "")
     lines[#lines + 1] = ""
     for _, l in ipairs(vim.split(c.body or "", "\n", { plain = true })) do
       lines[#lines + 1] = l
@@ -53,16 +64,43 @@ function M.lines(thread)
       lines[#lines + 1] = "```"
     end
     lines[#lines + 1] = ""
+    spans[#spans + 1] = { first = first, last = #lines, comment_id = c.id }
   end
-  return lines
+  return lines, spans
 end
 
 ---@param buf integer
 ---@param thread ReviewThread
+---@return CommentSpan[] spans
 local function render_into(buf, thread)
+  local lines, spans = M.lines(thread)
   vim.bo[buf].modifiable = true
-  api.nvim_buf_set_lines(buf, 0, -1, false, M.lines(thread))
+  api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
+  return spans
+end
+
+---The thread shown in the float, fresh from the cached doc.
+---@return ReviewThread?
+local function current_thread()
+  if not state then return end
+  local doc = comments.docs[state.store_path]
+  for _, t in ipairs(doc and doc.threads or {}) do
+    if t.id == state.thread_id then return t end
+  end
+end
+
+---The comment under the float's cursor (the separator above a comment
+---belongs to it; the title rows to the first one).
+---@return string? comment_id
+local function comment_at_cursor()
+  if not (state and api.nvim_win_is_valid(state.win)) then return end
+  local lnum = api.nvim_win_get_cursor(state.win)[1]
+  for _, span in ipairs(state.spans) do
+    if lnum <= span.last then return span.comment_id end
+  end
+  local last = state.spans[#state.spans]
+  return last and last.comment_id
 end
 
 function M.close()
@@ -103,7 +141,7 @@ function M.open(thread, opts)
   local buf = api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].filetype = "markdown"
-  render_into(buf, thread)
+  local spans = render_into(buf, thread)
 
   -- Size to the content: wide enough to read prose comfortably, tall enough
   -- to avoid needless scrolling, never past ~3/4 of the screen.
@@ -130,7 +168,9 @@ function M.open(thread, opts)
     title_pos = "left",
   }
   if vim.fn.has("nvim-0.10") == 1 then
-    win_opts.footer = { { " ↵ reply · e edit · a apply · s resolve · q close ", "DiffviewCommentHint" } }
+    win_opts.footer = {
+      { " ↵ reply · e edit · d/D delete · u undo · a apply · s resolve · q close ", "DiffviewCommentHint" },
+    }
     win_opts.footer_pos = "right"
   end
 
@@ -149,6 +189,7 @@ function M.open(thread, opts)
     thread_id = thread.id,
     store_path = opts.store_path,
     src_win = src_win,
+    spans = spans,
   }
 
   local function map(lhs, fn, desc)
@@ -159,7 +200,26 @@ function M.open(thread, opts)
   map("E", M.close, "Close thread float")
   map("<CR>", function() back_to_source(function() comments.comment_open() end) end, "Reply to thread")
   map("r", function() back_to_source(function() comments.comment_open() end) end, "Reply to thread")
-  map("e", function() back_to_source(function() comments.comment_edit() end) end, "Edit your comment")
+  -- Edit/delete act on the comment under the float's cursor, so any of your
+  -- comments (not only the latest) can be fixed from here.
+  map("e", function()
+    local thread = current_thread()
+    if thread then comments.edit_comment(state.store_path, thread, comment_at_cursor()) end
+  end, "Edit the comment under the cursor (yours)")
+  map("d", function()
+    local thread, cid = current_thread(), comment_at_cursor()
+    if thread and cid then comments.delete_comment(state.store_path, thread, cid) end
+  end, "Delete the comment under the cursor")
+  map("D", function()
+    local thread = current_thread()
+    if thread then
+      local store_path = state.store_path
+      back_to_source(function() comments.delete_thread(store_path, thread.id) end)
+    end
+  end, "Delete the whole thread")
+  map("u", function()
+    if state then comments.comment_undo(state.store_path) end
+  end, "Undo the last delete")
   map("a", function() back_to_source(function() comments.comment_apply() end) end, "Apply suggestion")
   map("s", function() back_to_source(function() comments.comment_resolve() end) end, "Resolve toggle")
 
@@ -189,11 +249,17 @@ function M.refresh(docs)
 
   for _, t in ipairs(doc.threads) do
     if t.id == state.thread_id then
-      render_into(state.buf, t)
+      state.spans = render_into(state.buf, t)
       return
     end
   end
-  M.close() -- thread was deleted under us
+
+  -- The thread was deleted under us: if the float had focus, hand it back
+  -- to the diff.
+  local src = state.src_win
+  local focused = api.nvim_get_current_win() == state.win
+  M.close()
+  if focused and src and api.nvim_win_is_valid(src) then api.nvim_set_current_win(src) end
 end
 
 return M

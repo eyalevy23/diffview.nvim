@@ -324,7 +324,7 @@ function Diff1Inline:apply_inline_diff()
               if range[2] > range[1] then
                 api.nvim_buf_set_extmark(buf_b, ns, j - 1, range[1], {
                   end_col = range[2],
-                  hl_group = "DiffviewDiffText",
+                  hl_group = "DiffviewDiffAddText",
                   priority = 51,
                 })
               end

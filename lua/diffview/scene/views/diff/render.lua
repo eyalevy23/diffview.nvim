@@ -85,9 +85,9 @@ end
 ---of nesting spends its columns on the name instead of on a fixed prefix.
 ---@param comp  RenderComponent
 ---@param show_path boolean
----@param depth integer|nil
+---@param indent RowChunk|nil Tree indent (spaces or guide lines); nil in list mode.
 ---@param width integer Panel text width.
-local function render_file(comp, show_path, depth, width)
+local function render_file(comp, show_path, indent, width)
   ---@type FileEntry
   local file = comp.context
   local conf = config.get_config()
@@ -96,8 +96,8 @@ local function render_file(comp, show_path, depth, width)
   -- directly under its parent's folder icon (the dir row spends one column on
   -- the fold chevron before its own icon).
   local left = {}
-  if depth then
-    left[#left + 1] = { string.rep(" ", depth + 1) }
+  if indent then
+    left[#left + 1] = indent
   end
   local icon, icon_hl = hl.get_file_icon(file.basename, file.extension)
   left[#left + 1] = { icon, icon_hl }
@@ -128,9 +128,13 @@ local function render_file(comp, show_path, depth, width)
 
   if file.stats then
     if file.stats.additions then
-      right[#right + 1] = { " " .. file.stats.additions, "DiffviewFilePanelInsertions" }
-      right[#right + 1] = { ", " }
-      right[#right + 1] = { tostring(file.stats.deletions), "DiffviewFilePanelDeletions" }
+      -- "+N -M", like the section totals; a zero side is left out.
+      if file.stats.additions > 0 or file.stats.deletions == 0 then
+        right[#right + 1] = { " +" .. file.stats.additions, "DiffviewFilePanelInsertions" }
+      end
+      if file.stats.deletions > 0 then
+        right[#right + 1] = { " -" .. file.stats.deletions, "DiffviewFilePanelDeletions" }
+      end
     elseif file.stats.conflicts then
       local has_conflicts = file.stats.conflicts > 0
       right[#right + 1] = {
@@ -179,11 +183,20 @@ end
 ---@param depth integer
 ---@param comp RenderComponent
 ---@param width integer
-local function render_file_tree_recurse(depth, comp, width)
+---@param cont? string Guide columns of the ancestors ("│ " or "  " each).
+---@param last? boolean Last child of its directory.
+local function render_file_tree_recurse(depth, comp, width, cont, last)
   local conf = config.get_config()
+  -- Indent guides: a row hangs off its parent's chevron column with ├/└,
+  -- ancestors that have more children below continue with │. Top-level rows
+  -- draw none.
+  local guides = conf.file_panel.tree_options.indent_markers ~= false
+  cont = cont or ""
+  local lead = depth == 0 and "" or (cont .. (last and "└ " or "├ "))
 
   if comp.name == "file" then
-    render_file(comp, false, depth, width)
+    local indent = guides and { lead, "DiffviewNonText" } or { string.rep(" ", depth + 1) }
+    render_file(comp, false, indent, width)
     return
   end
 
@@ -206,7 +219,7 @@ local function render_file_tree_recurse(depth, comp, width)
   -- ("lua/diffview/scene/views") are the longest text in the panel, so they
   -- truncate and get the overflow float like any other row.
   local left = {
-    { string.rep(" ", depth) },
+    guides and { lead, "DiffviewNonText" } or { string.rep(" ", depth) },
     { ctx.collapsed and conf.signs.fold_closed or conf.signs.fold_open, "DiffviewNonText" },
   }
 
@@ -224,8 +237,9 @@ local function render_file_tree_recurse(depth, comp, width)
   render_row(dir, left, { { ctx.name, "DiffviewFolderName" } }, right, width)
 
   if not ctx.collapsed then
-    for _, item in ipairs(items.components) do
-      render_file_tree_recurse(depth + 1, item, width)
+    local kids = depth == 0 and "" or (cont .. (last and "  " or "│ "))
+    for i, item in ipairs(items.components) do
+      render_file_tree_recurse(depth + 1, item, width, kids, i == #items.components)
     end
   end
 end
@@ -294,9 +308,20 @@ return function(panel)
 
   local comp = panel.components.path.comp
 
-  comp:add_line(
-    pl:truncate(pl:vim_fnamemodify(panel.adapter.ctx.toplevel, ":~"), width - 6),
-    "DiffviewFilePanelRootPath"
+  -- Header: repo name (the explorer's root label), its location dimmed, and
+  -- the help key pinned right — one row instead of three.
+  local root = panel.adapter.ctx.toplevel
+  local parent = pl:parent(root) -- nil for a repo at the filesystem root
+  render_row(
+    comp,
+    conf.use_icons and { { conf.icons.folder_open .. " ", "DiffviewFolderSign" } } or {},
+    {
+      { pl:basename(root), "DiffviewFilePanelRootPath" },
+      parent and { " " .. pl:vim_fnamemodify(parent, ":~"), "DiffviewFilePanelPath" } or { "" },
+    },
+    (conf.show_help_hints and panel.help_mapping)
+      and { { " " .. panel.help_mapping .. " help", "DiffviewFilePanelPath" } } or {},
+    text_width
   )
 
   local comments = package.loaded["diffview.comments"]
@@ -314,11 +339,7 @@ return function(panel)
     comp:add_line(truncate_text(review.summary:match("^[^\n]*"), text_width), "DiffviewFilePanelPath")
   end
 
-  if conf.show_help_hints and panel.help_mapping then
-    comp:add_text("Help: ", "DiffviewFilePanelPath")
-    comp:add_line(panel.help_mapping, "DiffviewFilePanelCounter")
-    comp:add_line()
-  end
+  comp:add_line()
 
   if #panel.files.conflicting > 0 then
     comp = panel.components.conflicting.title.comp

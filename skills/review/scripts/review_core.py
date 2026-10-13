@@ -45,7 +45,7 @@ KEY_ORDER = {
     "outdated_since": 15, "resolved_reason": 16, "comments": 17,
     "path": 20, "side": 21, "rev": 22, "line": 23, "end_line": 24,
     "snippet": 25, "ctx_before": 26, "ctx_after": 27,
-    "author": 30, "ts": 31, "body": 32, "suggestion": 33,
+    "author": 30, "ts": 31, "body": 32, "suggestion": 33, "edited_at": 34,
     "replace_lines": 40, "text": 41,
     "summary": 50,
 }
@@ -351,6 +351,7 @@ def apply_ops(doc, ops):
                        "%r, not claude. Others' comments are untouchable."
                        % (i, cid, target.get("author")))
             target["body"] = as_str(op.get("body"), "body", i)
+            target["edited_at"] = ts
             parent["updated_at"] = ts
 
         elif kind == "set_status":

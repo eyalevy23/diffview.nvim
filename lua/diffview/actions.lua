@@ -389,6 +389,16 @@ function M.comment_apply()
   require("diffview.comments").comment_apply()
 end
 
+---Delete the comment thread at the cursor line (undoable).
+function M.comment_delete()
+  require("diffview.comments").comment_delete()
+end
+
+---Restore the most recently deleted thread or comment.
+function M.comment_undo()
+  require("diffview.comments").comment_undo()
+end
+
 ---Delete ALL comment threads in the repo (asks for confirmation).
 function M.comment_clear_all()
   require("diffview.comments").comment_clear_all()

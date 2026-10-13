@@ -20,6 +20,7 @@ local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModu
 local FileHistoryView = lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local debounce = lazy.require("diffview.debounce") ---@module "diffview.debounce"
+local hl = lazy.require("diffview.hl") ---@module "diffview.hl"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
@@ -79,6 +80,34 @@ Diff1Unified.create = async.void(function(self, pivot)
   await(self:create_post())
 end)
 
+---Winbar breadcrumb for a repo-relative path — ` lua ›  atlas ›  query.lua`
+---— plus the rendered diff's `+N -M`, right-aligned. A static string, rebuilt
+---only when the diff re-renders.
+---@param path string
+---@param st? UnifiedState
+---@return string
+function Diff1Unified:winbar_for(path, st)
+  local conf = config.get_config()
+  local segs = vim.split(path, "/", { plain = true })
+  local out = {}
+  for i, seg in ipairs(segs) do
+    local name = seg:gsub("%%", "%%%%")
+    if i < #segs then
+      local icon = conf.use_icons and ("%#DiffviewFolderSign#" .. conf.icons.folder_closed .. " ") or ""
+      out[i] = icon .. "%#DiffviewWinBarDir#" .. name
+    else
+      local icon, icon_hl = hl.get_file_icon(seg, vim.fn.fnamemodify(seg, ":e"))
+      out[i] = (icon_hl and ("%#" .. icon_hl .. "#") or "") .. icon .. "%#DiffviewWinBarFile#" .. name
+    end
+  end
+  local bar = " " .. table.concat(out, "%#DiffviewWinBarSep# › ")
+  if st and st.n_add + st.n_del > 0 then
+    bar = bar .. ("%%=%%#DiffviewFilePanelInsertions#+%d %%#DiffviewFilePanelDeletions#-%d ")
+      :format(st.n_add, st.n_del)
+  end
+  return bar .. "%*"
+end
+
 ---The synthetic file wrapping the unified scratch buffer. Created lazily on
 ---the FileEntry's layout so the buffer is cached per entry and adopted by the
 ---view's layout clone through `use_entry`. Being a real `vcs.File` keeps
@@ -99,7 +128,7 @@ function Diff1Unified:get_unified_file()
       binary = false,
     }) --[[@as vcs.File ]]
     file.symbol = "b"
-    file.winbar = (" UNIFIED - %s"):format(file.path)
+    file.winbar = self:winbar_for(file.path)
 
     self.main:set_file(file)
   end
@@ -198,11 +227,16 @@ function Diff1Unified:_refresh()
   local row = api.nvim_win_get_cursor(self.main.id)[1]
   local col = api.nvim_win_get_cursor(self.main.id)[2]
   local anchor = unified.edit_target(file.bufnr, row)
+  local open_folds = unified.open_fold_spans(self.main.id, file.bufnr)
 
-  local _, changed = self:_render()
+  local st, changed = self:_render()
   if not changed then return end
 
-  unified.apply_folds(self.main.id, file.bufnr)
+  file.winbar = self:winbar_for(file.path, st)
+  if self.main:show_winbar_info() then
+    vim.wo[self.main.id].winbar = file.winbar
+  end
+  unified.apply_folds(self.main.id, file.bufnr, open_folds)
 
   if anchor then
     local new_row = unified.row_for(file.bufnr, "b", anchor)
@@ -302,7 +336,9 @@ Diff1Unified.open_files = async.void(function(self)
 
   local file = self:_ensure_unified_buf()
   local win_is_new = api.nvim_win_get_buf(self.main.id) ~= file.bufnr
-  local _, changed = self:_render()
+  local open_folds = unified.open_fold_spans(self.main.id, file.bufnr)
+  local st, changed = self:_render()
+  file.winbar = self:winbar_for(file.path, st)
 
   -- Attach keymaps BEFORE the buffer enters the window: plugins that scan
   -- buffer-local maps on BufEnter (e.g. which-key installing its instant
@@ -334,7 +370,7 @@ Diff1Unified.open_files = async.void(function(self)
     signcolumn = "yes:1",
     statuscolumn = "%!v:lua.require'diffview.scene.layouts.unified_render'.statuscol()",
     foldtext = "v:lua.require'diffview.scene.layouts.unified_render'.foldtext()",
-    fillchars = "fold:─,diff: ",
+    fillchars = "fold: ,diff: ,eob: ",
   })
 
   if self.main:show_winbar_info() then
@@ -344,7 +380,7 @@ Diff1Unified.open_files = async.void(function(self)
   self.main.emitter:emit("post_open")
 
   if changed or win_is_new then
-    unified.apply_folds(self.main.id, file.bufnr)
+    unified.apply_folds(self.main.id, file.bufnr, open_folds)
   end
 
   api.nvim_win_call(self.main.id, function()

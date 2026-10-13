@@ -14,6 +14,12 @@ M.ns = ns
 local SIGN_OPEN = "●"
 local SIGN_RESOLVED = "○"
 local SIGN_APPLIED = "✓"
+-- Continuation rows of a range thread: a thin rail tying the lines together.
+local SIGN_RANGE = "┃"
+
+---Rows of the threads rendered per buffer (for ]t/[t), in render order.
+---@type table<integer, integer[]>
+local rendered_rows = {}
 
 -- Cards never grow past this, no matter how wide the window is — full-bleed
 -- comment boxes on an ultrawide read worse than a bounded card.
@@ -340,8 +346,9 @@ end
 ---@param width integer
 ---@param outdated boolean
 ---@param max_rows integer|false|nil Cap on total card rows, borders included.
+---@param span? { [1]: integer, [2]: integer } Source lines of a range thread.
 ---@return table[][] virt_lines
-local function build_box(thread, width, outdated, max_rows)
+local function build_box(thread, width, outdated, max_rows, span)
   local border_hl = outdated and "DiffviewCommentBorderOutdated" or "DiffviewCommentBorder"
   local body_hl = outdated and "DiffviewCommentOutdated" or "DiffviewCommentBody"
   local inner = width - 4
@@ -405,17 +412,21 @@ local function build_box(thread, width, outdated, max_rows)
   local function header_chunks(comment)
     return {
       { ("%s %s"):format(author_icon(comment.author), comment.author), author_hl(comment.author) },
-      { (" · %s "):format(rel_ts(comment.ts)), "DiffviewCommentDim" },
+      { (" · %s%s "):format(rel_ts(comment.ts), comment.edited_at and " · edited" or ""), "DiffviewCommentDim" },
     }
   end
 
-  -- Top border: the first comment's identity, plus the outdated tag.
+  -- Top border: the first comment's identity, plus the range and outdated
+  -- tags (the outdated one is kept longest when the row is tight).
   local first = thread.comments[1]
-  lines[#lines + 1] = border_row(
-    { "╭╴", "╮" },
-    first and header_chunks(first) or {},
-    outdated and { { " ⊘ outdated ", "DiffviewCommentOutdated" } } or {}
-  )
+  local tags = {}
+  if span then
+    tags[#tags + 1] = { (" lines %d–%d "):format(span[1], span[2]), "DiffviewCommentDim" }
+  end
+  if outdated then
+    tags[#tags + 1] = { " ⊘ outdated ", "DiffviewCommentOutdated" }
+  end
+  lines[#lines + 1] = border_row({ "╭╴", "╮" }, first and header_chunks(first) or {}, tags)
 
   for ci, comment in ipairs(thread.comments) do
     -- Later comments get a soft separator and their own header row.
@@ -503,7 +514,11 @@ end
 
 ---@class PlacedThread
 ---@field thread ReviewThread
----@field row integer 1-indexed row in the target buffer
+---@field row integer 1-indexed row in the target buffer (first line)
+---@field end_row integer Row of the last line (== row for one-line threads)
+---@field rows integer[] Rows of the anchored side's lines, ascending
+---@field line integer Resolved first source line
+---@field end_line integer Resolved last source line
 ---@field outdated boolean
 
 ---Render the given threads into a buffer. Wipes and redraws the whole
@@ -511,7 +526,10 @@ end
 ---@param bufnr integer
 ---@param placed PlacedThread[]
 function M.render(bufnr, placed)
-  if not api.nvim_buf_is_valid(bufnr) then return end
+  if not api.nvim_buf_is_valid(bufnr) then
+    rendered_rows[bufnr] = nil
+    return
+  end
   api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
 
   local width = 80
@@ -526,10 +544,15 @@ function M.render(bufnr, placed)
   if max_rows == nil then max_rows = 16 end
 
   local max_row = api.nvim_buf_line_count(bufnr)
+  local function clamp(r) return math.min(math.max(r, 1), max_row) end
+  local rows = {}
+  rendered_rows[bufnr] = rows
 
   for _, p in ipairs(placed) do
-    local row = math.min(math.max(p.row, 1), max_row)
+    local row = clamp(p.row)
+    local end_row = clamp(p.end_row or p.row)
     local thread = p.thread
+    rows[#rows + 1] = row
 
     local sign, sign_group
     if thread.status == "resolved" then
@@ -547,9 +570,18 @@ function M.render(bufnr, placed)
       priority = 60,
     })
 
+    for i = 2, #(p.rows or {}) do
+      api.nvim_buf_set_extmark(bufnr, ns, clamp(p.rows[i]) - 1, 0, {
+        sign_text = SIGN_RANGE,
+        sign_hl_group = sign_group,
+        priority = 59,
+      })
+    end
+
     if thread.status == "open" then
-      api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
-        virt_lines = build_box(thread, width, p.outdated, max_rows),
+      local span = (p.end_line and p.end_line > p.line) and { p.line, p.end_line } or nil
+      api.nvim_buf_set_extmark(bufnr, ns, end_row - 1, 0, {
+        virt_lines = build_box(thread, width, p.outdated, max_rows, span),
         virt_lines_above = false,
         priority = 60,
       })
@@ -561,11 +593,9 @@ end
 ---@param bufnr integer
 ---@return integer[] rows 1-indexed
 function M.thread_rows(bufnr)
-  local marks = api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
   local rows, seen = {}, {}
-  for _, m in ipairs(marks) do
-    local row = m[2] + 1
-    if m[4].sign_text and not seen[row] then
+  for _, row in ipairs(rendered_rows[bufnr] or {}) do
+    if not seen[row] then
       seen[row] = true
       rows[#rows + 1] = row
     end
@@ -575,6 +605,7 @@ function M.thread_rows(bufnr)
 end
 
 function M.clear(bufnr)
+  rendered_rows[bufnr] = nil
   if api.nvim_buf_is_valid(bufnr) then
     api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
   end

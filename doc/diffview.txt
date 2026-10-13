@@ -368,6 +368,7 @@ COMMANDS                                        *diffview-commands*
             • `pick`: Pick a thread and jump to it (threads awaiting your
               reply first).
             • `awaiting`: Pick among the threads awaiting your reply.
+            • `undo`: Restore the last deleted thread or comment.
             • `reload`: Re-read the review file from disk and repaint (the
               fs-watcher makes this automatic; this is the manual escape
               hatch).
@@ -478,7 +479,7 @@ view.x.layout                                   *diffview-config-view.x.layout*
                 `old# new# ±` via 'statuscolumn' (requires Neovim >= 0.9).
                 Word-level diff highlights and per-line Treesitter colors are
                 sourced from the underlying buffers. Unchanged regions fold
-                to "─── ··· N unchanged lines ···", and the normal fold keys
+                to a quiet "N unchanged lines" row (a `⋯` in the gutter), and the normal fold keys
                 (|zo|, |zc|, ...) work on them.
 
                 Default mappings in the view:
@@ -1469,7 +1470,8 @@ T                       Open the real file for editing at the line mapped
 
                                                 *diffview-maps-comments*
 <CR>                    Reply to the comment thread on the cursor line, or
-                        start a new one. See |diffview-comments|.
+                        start a new one. In visual mode: start a thread on
+                        the selected lines. See |diffview-comments|.
 
 ]t                      Jump to the next comment thread.
 
@@ -1482,11 +1484,19 @@ T                       Open the real file for editing at the line mapped
 
 <leader>gcq             Pick among the threads awaiting your reply.
 
-<leader>cd              Toggle resolved on the comment thread under the
+<leader>gce             Edit your latest comment on the thread under the
+                        cursor. To edit an older one, open the thread with
+                        `E` and press `e` on it.
+
+<leader>gcr             Toggle resolved on the comment thread under the
                         cursor.
 
-<leader>cs              Apply the suggestion of the comment thread under the
+<leader>gca             Apply the suggestion of the comment thread under the
                         cursor to the real file.
+
+<leader>gcd             Delete the comment thread under the cursor.
+
+<leader>gcu             Undo the last delete (thread or comment).
 
                                                 *diffview-maps-goto_file_split*
 <C-w><C-f>              Open the local version of the file in a new split. See
@@ -1642,15 +1652,33 @@ Default mappings in the view:
 
         `<CR>`        Reply to the thread on the cursor line, or start a new
                     one. Opens an input float: `<C-s>` submits, `q` cancels.
+                    In visual mode: start a thread on the selected lines.
+        `E`           Read the thread in a float (see below).
         `]t` / `[t`     Jump to the next / previous comment thread.
         `]r` / `[r`     Jump to the next / previous thread awaiting your reply.
         `<leader>gcq` Pick among the threads awaiting your reply.
-        `<leader>cd`  Toggle resolved on the thread under the cursor.
-        `<leader>cs`  Apply the thread's suggestion block to the real file.
+        `<leader>gce` Edit your latest comment on the thread.
+        `<leader>gcr` Toggle resolved on the thread under the cursor.
+        `<leader>gca` Apply the thread's suggestion block to the real file.
+        `<leader>gcd` Delete the thread under the cursor.
+        `<leader>gcu` Undo the last delete.
+
+Inside the thread float (`E`), edit and delete act on the comment under the
+cursor: `e` edits it (your own comments only), `d` deletes it (deleting a
+thread's only comment deletes the thread), `D` deletes the whole thread and
+`u` undoes the last delete. `↵`/`r` replies, `a` applies, `s` resolves.
+Deletes can be undone for the rest of the session.
+
+                                                *diffview-comments-range*
+A thread can cover several lines: select them in visual mode and press
+`<CR>`. The first line carries the thread's sign, the others a thin rail,
+and the card sits under the last line. A selection that mixes deleted and
+added rows comments on the new side's lines. Any line of the range acts on
+the thread (reply, resolve, delete, …).
 
 The review can be managed with the |:DiffviewReview| command: >vim
 
-        :DiffviewReview {list|pick|awaiting|reload|clear|resolve-all}
+        :DiffviewReview {list|pick|awaiting|undo|reload|clear|resolve-all}
 <
 The file panel shows a per-file badge with the number of open threads
 (`🗨N`).
@@ -1767,15 +1795,16 @@ Groups used by the unified layout (|diffview-unified|):
                                       `diffAdded`.
         `DiffviewUnifiedSignDel`        The `-` sign for deleted lines. Links
                                       to `diffRemoved`.
-        `DiffviewDiffText`              Intra-line (word-level) emphasis on
+        `DiffviewDiffAddText`           Intra-line (word-level) emphasis on
                                       added lines. Derived from your
                                       colorscheme: the add band's background
                                       nudged toward the diff-add green
                                       (background only — syntax colors stay).
-                                      Falls back to |hl-DiffText| without gui
-                                      colors.
+                                      Groups with `reverse` are read as they
+                                      are displayed. Falls back to
+                                      `DiffviewDiffText` without gui colors.
         `DiffviewDiffDeleteText`        Intra-line emphasis on deleted lines.
-                                      Derived like `DiffviewDiffText`, from
+                                      Derived like `DiffviewDiffAddText`, from
                                       the delete band and red.
 
 Groups used by the peek float (|diffview-peek|):

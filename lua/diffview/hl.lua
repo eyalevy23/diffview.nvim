@@ -177,14 +177,35 @@ end
 ---@param no_trans? boolean Don't translate the syntax group (follow links).
 ---@return string?
 function M.get_fg(groups, no_trans)
+  return M.get_displayed(groups, "fg", no_trans)
+end
+
+---The color a group actually paints as `which` ("fg"|"bg"). Unlike the raw
+---attribute, this honors `reverse`: a reversed group (common for diff groups
+---in gruvbox-style themes) shows its fg as the background and vice versa —
+---colors derived from the raw attribute would come out inverted.
+---@param groups string|string[] Syntax group name, or an ordered list of
+---groups where the first found value will be returned.
+---@param which "fg"|"bg"
+---@param no_trans? boolean Don't translate the syntax group (follow links).
+---@return string?
+function M.get_displayed(groups, which, no_trans)
   no_trans = not not no_trans
 
   if type(groups) ~= "table" then groups = { groups } end
 
   for _, group in ipairs(groups) do
-    local v = M.get_hl_attr(group, hlattr.x_fg, no_trans) --[[@as string? ]]
-
-    if v then return v end
+    local hl = M.get_hl(group, no_trans)
+    if hl then
+      local flip = hl.reverse
+      local v
+      if which == "bg" then
+        v = flip and hl.x_fg or hl.x_bg
+      else
+        v = flip and hl.x_bg or hl.x_fg
+      end
+      if v then return v end
+    end
   end
 end
 
@@ -193,15 +214,7 @@ end
 ---@param no_trans? boolean Don't translate the syntax group (follow links).
 ---@return string?
 function M.get_bg(groups, no_trans)
-  no_trans = not not no_trans
-
-  if type(groups) ~= "table" then groups = { groups } end
-
-  for _, group in ipairs(groups) do
-    local v = M.get_hl_attr(group, hlattr.x_bg, no_trans) --[[@as string? ]]
-
-    if v then return v end
-  end
+  return M.get_displayed(groups, "bg", no_trans)
 end
 
 ---@param groups string|string[] Syntax group name, or an ordered list of
@@ -449,6 +462,9 @@ M.hl_links = {
   FilePanelConflicts = "DiagnosticSignWarn",
   FolderName = "Directory",
   FolderSign = "PreProc",
+  WinBarDir = "DiffviewFilePanelPath",
+  WinBarFile = "DiffviewFilePanelFileName",
+  WinBarSep = "DiffviewNonText",
   Hash = "Identifier",
   -- pick_commit's hash colours, after lazygit: on main / pushed / not pushed.
   CommitMerged = "diffAdded",
@@ -473,8 +489,11 @@ M.hl_links = {
   DiffText = "DiffText",
   UnifiedNumOld = "LineNr",
   UnifiedNumNew = "LineNr",
+  UnifiedNumCur = "CursorLineNr",
   UnifiedSignAdd = "diffAdded",
   UnifiedSignDel = "diffRemoved",
+  UnifiedFold = "Comment",
+  UnifiedFoldIcon = "DiffviewNonText",
   CommentSignHuman = "Identifier",
   CommentSignAI = "Special",
   CommentSignResolved = "Comment",
@@ -561,14 +580,53 @@ function M.update_comment_hl()
   end
 end
 
+---Perceptual-enough distance between two "#rrggbb" colors (sum of channel
+---deltas, 0..765).
+---@param c1 string
+---@param c2 string
+---@return integer
+local function color_distance(c1, c2)
+  local r1, g1, b1 = c1:match("^#(%x%x)(%x%x)(%x%x)$")
+  local r2, g2, b2 = c2:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not (r1 and r2) then return 0 end
+  return math.abs(tonumber(r1, 16) - tonumber(r2, 16))
+    + math.abs(tonumber(g1, 16) - tonumber(g2, 16))
+    + math.abs(tonumber(b1, 16) - tonumber(b2, 16))
+end
+
+---Word-level emphasis for one side, derived from that side's line band: the
+---band's bg pushed toward the side's accent (green/red), so changed words
+---read as a stronger shade of their own line — not the unrelated `DiffText`
+---color shared by both sides. Background only: syntax colors show through.
+---Falls back to linking `fallback` when no gui color can be derived or the
+---result would be indistinguishable from the band (e.g. a band that already
+---IS the accent color).
+---@param name string Group to define.
+---@param band string Line band group.
+---@param accents string[] Candidate accent fg groups.
+---@param fallback string
+local function word_hl(name, band, accents, fallback)
+  local band_bg = M.get_bg(band)
+  local accent = M.get_fg(accents)
+  local word = M.blend(accent, band_bg, 0.28)
+
+  if word and color_distance(word, band_bg) >= 24 then
+    M.hi(name, { bg = word, default = true, explicit = true })
+  else
+    M.hi_link(name, fallback, { default = true })
+  end
+end
+
 function M.update_diff_hl()
-  local fg = M.get_fg("DiffDelete", true) or "NONE"
-  local bg = M.get_bg("DiffDelete", true) or "NONE"
+  local fg = M.get_hl_attr("DiffDelete", hlattr.x_fg, true) or "NONE"
+  local bg = M.get_hl_attr("DiffDelete", hlattr.x_bg, true) or "NONE"
   local style = M.get_style("DiffDelete", true) or "NONE"
 
   M.hi("DiffviewDiffAddAsDelete", { fg = fg, bg = bg, style = style })
   M.hi_link("DiffviewDiffDeleteDim", "Comment", { default = true })
-  M.hi_link("DiffviewDiffDeleteText", "DiffviewDiffText", { default = true })
+
+  word_hl("DiffviewDiffAddText", "DiffviewDiffAdd", { "diffAdded", "@diff.plus", "Added" }, "DiffviewDiffText")
+  word_hl("DiffviewDiffDeleteText", "DiffviewDiffDelete", { "diffRemoved", "@diff.minus", "Removed" }, "DiffviewDiffText")
 end
 
 function M.setup()

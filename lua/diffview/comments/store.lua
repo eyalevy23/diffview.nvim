@@ -40,6 +40,7 @@ M.last_written = {}
 ---@field ts string ISO-8601 UTC
 ---@field body string
 ---@field suggestion? ReviewSuggestion
+---@field edited_at? string ISO-8601 UTC of the last edit
 
 ---@class ReviewAnchor
 ---@field path string Repo-relative file path
@@ -145,7 +146,7 @@ local KEY_ORDER = {
   outdated_since = 15, resolved_reason = 16, comments = 17,
   path = 20, side = 21, rev = 22, line = 23, end_line = 24,
   snippet = 25, ctx_before = 26, ctx_after = 27,
-  author = 30, ts = 31, body = 32, suggestion = 33,
+  author = 30, ts = 31, body = 32, suggestion = 33, edited_at = 34,
   replace_lines = 40, text = 41,
   summary = 50,
 }

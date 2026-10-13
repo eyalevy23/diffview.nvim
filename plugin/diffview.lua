@@ -65,6 +65,19 @@ end, {
   end,
 })
 
+-- Defined here, not when the comments module first loads: `:DiffviewReview
+-- setup` is the first thing a new user runs, before any diff view exists.
+command("DiffviewReview", function(ctx)
+  require("diffview.comments").command(ctx)
+end, {
+  nargs = "?",
+  complete = function(arg_lead)
+    return vim.tbl_filter(function(sub)
+      return sub:find(arg_lead, 1, true) == 1
+    end, require("diffview.comments").SUBCOMMANDS)
+  end,
+})
+
 command("DiffviewLog", function()
   vim.cmd(("sp %s | norm! G"):format(
     vim.fn.fnameescape(DiffviewGlobal.logger.outfile)
