@@ -11,6 +11,7 @@ local render = require("diffview.comments.render")
 local store = require("diffview.comments.store")
 
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
+local DiffView = lazy.access("diffview.scene.views.diff.diff_view", "DiffView") ---@type DiffView|LazyModule
 local unified = lazy.require("diffview.scene.layouts.unified_render") ---@module "diffview.scene.layouts.unified_render"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 local dir_watch = lazy.require("diffview.vcs.dir_watch") ---@module "diffview.vcs.dir_watch"
@@ -335,6 +336,15 @@ local function ensure_watcher(ctx)
       if warn then utils.warn("[diffview] " .. warn) end
 
       M.refresh_all(path)
+
+      -- The agent writes the review file when it is done with a thread
+      -- (reply, applied), usually after editing files: refresh the file list,
+      -- which nothing else updates for working-tree edits while Neovim has
+      -- focus. Not for file history: re-running its log costs far more.
+      local view = lib.get_current_view()
+      if view and view:instanceof(DiffView.__get()) and store.path_for(view.adapter) == path then
+        view:update_files()
+      end
 
       if lib.get_current_view() then
         api.nvim_echo({ { update_message(prev, doc, index_of(doc)) } }, false, {})
