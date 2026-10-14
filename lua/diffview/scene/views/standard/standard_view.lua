@@ -46,6 +46,13 @@ end
 function StandardView:close()
   self.panel:destroy()
   View.close(self)
+  -- The layout clones own their disk watches, timers and autocmds. Keep
+  -- `cur_layout` set (destroyed, windows invalid): a file load still in
+  -- flight checks it after the view closed.
+  for _, layout in pairs(self.layouts) do
+    layout:destroy()
+  end
+  self.layouts = {}
 end
 
 ---@override

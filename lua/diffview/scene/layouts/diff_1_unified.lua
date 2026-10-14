@@ -20,6 +20,7 @@ local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModu
 local FileHistoryView = lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local debounce = lazy.require("diffview.debounce") ---@module "diffview.debounce"
+local dir_watch = lazy.require("diffview.vcs.dir_watch") ---@module "diffview.vcs.dir_watch"
 local hl = lazy.require("diffview.hl") ---@module "diffview.hl"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
@@ -44,7 +45,10 @@ function Diff1Unified:init(opt)
   self:super(opt)
   self.main = Window({})
   self:use_windows(self.main)
-  self._watched = {}
+  self._src = nil ---@type integer? The b-side buffer being followed.
+  self._disk = nil ---@type fun()? Unsubscribes the one disk watch, for `_src`.
+  self._work = nil ---@type ManagedFn? The one re-render debounce.
+  self._attached = {} ---@type table<integer, true> Buffers carrying our attach.
 end
 
 ---@override
@@ -208,7 +212,7 @@ function Diff1Unified:_render()
   local st, changed = unified.render(file.bufnr, self.a.file, self.b.file, {
     file_mode = self._file_mode_buf == file.bufnr,
   })
-  self:_watch_source()
+  self:_follow(self.b.file and self.b.file:is_valid() and self.b.file.bufnr or nil)
   self:_watch_diagnostics(file.bufnr)
   return st, changed
 end
@@ -321,16 +325,65 @@ function Diff1Unified:_is_visible()
     and api.nvim_win_get_tabpage(self.main.id) == api.nvim_get_current_tabpage()
 end
 
----Watch the new-side source buffer for edits (made via jump-to-edit or any
----other window) and re-render, debounced. A hidden view is never re-rendered
----for nobody — the refresh is deferred until its tab becomes current.
----@private
-function Diff1Unified:_watch_source()
-  local src = self.b.file and self.b.file:is_valid() and self.b.file.bufnr or nil
-  if not src or self._watched[src] then return end
-  self._watched[src] = true
+---Reload `src` without a prompt or an E211 for a deleted file. A buffer with
+---unsaved edits is yours, and under 'noautoread' checktime raises a dialog
+---that `:silent!` does not suppress: both are left alone.
+---@param src integer
+local function checktime(src)
+  if not (api.nvim_buf_is_loaded(src) and vim.bo[src].buftype == "" and not vim.bo[src].modified) then
+    return
+  end
+  -- Global-local: the buffer value is nil until set with :setlocal.
+  local autoread = api.nvim_get_option_value("autoread", { buf = src })
+  if autoread == nil then autoread = vim.go.autoread end
+  if autoread then
+    pcall(vim.cmd, ("silent! checktime %d"):format(src))
+  end
+end
 
-  local work = debounce.debounce_trailing(REFRESH_DEBOUNCE_MS, false, vim.schedule_wrap(function()
+---Reload `src` when its file changes on disk. Neovim itself only checks on
+---focus gain, so an agent's edit landing while Neovim already has focus
+---would never show. Watches the directory, not the file: tools that save by
+---renaming a temp file over it (`sed -i`, most editors) end a file watch.
+---@private
+---@param src integer
+---@return fun()? unsubscribe
+function Diff1Unified:_watch_disk(src)
+  local path = api.nvim_buf_get_name(src)
+  if path == "" or vim.bo[src].buftype ~= "" then return end
+
+  return dir_watch.subscribe(vim.fs.dirname(path), vim.fs.basename(path), function(err, filename)
+    -- One check per burst: a write can arrive as several events.
+    if err or filename == nil or self._disk_pending == src then return end
+    self._disk_pending = src
+    vim.schedule(function()
+      if self._disk_pending == src then self._disk_pending = nil end
+      -- An event queued before the layout moved on to another file.
+      if self._src == src then checktime(src) end
+    end)
+  end)
+end
+
+---Follow the new-side source buffer: one disk watch and one attach for the
+---file on screen, re-rendering (debounced) on edits made via jump-to-edit,
+---any other window or disk. A hidden view is never re-rendered for nobody —
+---the refresh is deferred until its tab becomes current.
+---@private
+---@param src integer?
+function Diff1Unified:_follow(src)
+  if self._src ~= src then
+    self._src = src
+    -- Subscribe before leaving the old file: within one directory the OS
+    -- watch is kept rather than closed and recreated.
+    local unwatch = src and self:_watch_disk(src) or nil
+    if self._disk then self._disk() end
+    self._disk = unwatch
+  end
+  if not src then return end
+
+  -- The rest runs on every render: Neovim drops an attach when the buffer is
+  -- unloaded (`:bdelete`), and the render reloading it must re-attach.
+  self._work = self._work or debounce.debounce_trailing(REFRESH_DEBOUNCE_MS, false, vim.schedule_wrap(function()
     if not self:_is_visible() then
       self._refresh_pending = true
       return
@@ -338,18 +391,34 @@ function Diff1Unified:_watch_source()
     self:_refresh()
   end))
 
-  api.nvim_buf_attach(src, false, {
-    on_lines = function()
-      if not (self.main.file and self.main.file:is_valid()) then
-        self._watched[src] = nil
-        return true -- detach
-      end
-      work()
-    end,
-    on_detach = function()
-      self._watched[src] = nil
-    end,
-  })
+  -- An attach left on a file the layout has moved away from stays idle and
+  -- is reused if that file comes back.
+  if not self._attached[src] then
+    local function live()
+      return src == self._src and self.main.file and self.main.file:is_valid()
+    end
+
+    -- False when the buffer is not loaded: the next render tries again.
+    self._attached[src] = api.nvim_buf_attach(src, false, {
+      on_lines = function()
+        if not live() then
+          self._attached[src] = nil
+          return true -- detach
+        end
+        self._work()
+      end,
+      -- A reload from disk (autoread, `:checktime`, `:edit`) fires only this,
+      -- never on_lines: without it an edit made outside Neovim (an agent, a
+      -- rebase) leaves the view showing the old content. Its return value
+      -- cannot detach.
+      on_reload = function()
+        if live() then self._work() end
+      end,
+      on_detach = function()
+        self._attached[src] = nil
+      end,
+    }) or nil
+  end
 
   if not self._catchup_au then
     self._catchup_au = api.nvim_create_autocmd("TabEnter", {
@@ -401,6 +470,12 @@ Diff1Unified.open_files = async.void(function(self)
   if self._file_mode_buf ~= file.bufnr then self._file_mode_buf = nil end
   local win_is_new = api.nvim_win_get_buf(self.main.id) ~= file.bufnr
   local open_folds = unified.open_fold_spans(self.main.id, file.bufnr)
+  -- Only the file on screen is watched: catch up on disk edits made while
+  -- this one was hidden. Done before `_render` follows it: the render reads
+  -- the fresh lines, and the now-stale attach queues no second one.
+  if self.b.file and self.b.file:is_valid() then
+    checktime(self.b.file.bufnr)
+  end
   local st, changed = self:_render()
   file.winbar = self:winbar_for(file.path, st)
 
@@ -466,6 +541,18 @@ function Diff1Unified:destroy()
   if self._catchup_au then
     pcall(api.nvim_del_autocmd, self._catchup_au)
     self._catchup_au = nil
+  end
+  -- Idempotent and reusable: a layout-class switch destroys a cached clone
+  -- that may be used again. Leftover attaches detach on their next edit.
+  if self._disk then
+    self._disk()
+    self._disk = nil
+  end
+  self._disk_pending = nil
+  self._src = nil
+  if self._work then
+    self._work.close()
+    self._work = nil
   end
   local file = self.main.file
   if file and file.bufnr then

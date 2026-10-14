@@ -47,17 +47,17 @@ function View:init(opt)
   self.ready = utils.sate(opt.ready, false)
   self.closing = utils.sate(opt.closing, Signal())
 
-  local function wrap_event(event)
-    DiffviewGlobal.emitter:on(event, function(_, view, ...)
-      local cur_view = require("diffview.lib").get_current_view()
+  -- Kept so close can unsubscribe it: the global emitter would otherwise
+  -- retain every view ever opened.
+  self._on_view_closed = function(_, view, ...)
+    local cur_view = require("diffview.lib").get_current_view()
 
-      if (view and view == self) or (not view and cur_view == self) then
-        self.emitter:emit(event, view, ...)
-      end
-    end)
+    if (view and view == self) or (not view and cur_view == self) then
+      self.emitter:emit("view_closed", view, ...)
+    end
   end
 
-  wrap_event("view_closed")
+  DiffviewGlobal.emitter:on("view_closed", self._on_view_closed)
 end
 
 function View:open()
@@ -84,6 +84,7 @@ function View:close()
   end
 
   DiffviewGlobal.emitter:emit("view_closed", self)
+  DiffviewGlobal.emitter:off(self._on_view_closed, "view_closed")
 end
 
 function View:is_cur_tabpage()

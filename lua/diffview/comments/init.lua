@@ -13,9 +13,9 @@ local store = require("diffview.comments.store")
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local unified = lazy.require("diffview.scene.layouts.unified_render") ---@module "diffview.scene.layouts.unified_render"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
+local dir_watch = lazy.require("diffview.vcs.dir_watch") ---@module "diffview.vcs.dir_watch"
 
 local api = vim.api
-local uv = vim.uv or vim.loop
 
 local M = {}
 
@@ -36,7 +36,8 @@ M.buf_ctx = {}
 ---@type table<string, ReviewDoc>
 M.docs = {}
 
----fs watchers per store path.
+---Unsubscribe functions of the fs-watchers, per store path.
+---@type table<string, fun()>
 M.watchers = {}
 
 ---Observation state per thread id from the latest placement pass:
@@ -317,18 +318,11 @@ local function ensure_watcher(ctx)
   local path = ctx.store_path
   if M.watchers[path] then return end
 
-  local handle = uv.new_fs_event()
-  if not handle then return end
-
-  local dir = vim.fs.dirname(path)
-  local fname = vim.fs.basename(path)
   local pending = false
 
-  -- Watch the directory: atomic renames replace the file inode, which breaks
-  -- direct file watches. The git dir is busy (index!), so filter by name.
-  local ok = handle:start(dir, {}, function(err, filename)
-    if err or (filename and filename ~= fname) then return end
-    if pending then return end
+  -- The git dir is shared with the index watcher: one OS watch for both.
+  local unsubscribe = dir_watch.subscribe(vim.fs.dirname(path), vim.fs.basename(path), function(err)
+    if err or pending then return end
     pending = true
 
     vim.defer_fn(function()
@@ -348,11 +342,7 @@ local function ensure_watcher(ctx)
     end, 200)
   end)
 
-  if ok then
-    M.watchers[path] = handle
-  else
-    handle:close()
-  end
+  M.watchers[path] = unsubscribe
 end
 
 ---Tear down state for stores that no longer back any live buffer: close the
@@ -368,10 +358,9 @@ function M.detach_orphans()
     end
   end
 
-  for path, handle in pairs(M.watchers) do
+  for path, unsubscribe in pairs(M.watchers) do
     if not live[path] then
-      handle:stop()
-      if not handle:is_closing() then handle:close() end
+      unsubscribe()
       M.watchers[path] = nil
 
       local doc = M.docs[path]

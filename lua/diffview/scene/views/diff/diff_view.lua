@@ -14,6 +14,7 @@ local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|Lazy
 local StandardView = lazy.access("diffview.scene.views.standard.standard_view", "StandardView") ---@type StandardView|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
 local debounce = lazy.require("diffview.debounce") ---@module "diffview.debounce"
+local dir_watch = lazy.require("diffview.vcs.dir_watch") ---@module "diffview.vcs.dir_watch"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 local vcs_utils = lazy.require("diffview.vcs.utils") ---@module "diffview.vcs.utils"
 local GitAdapter = lazy.access("diffview.vcs.adapters.git", "GitAdapter") ---@type GitAdapter|LazyModule
@@ -180,16 +181,14 @@ end
 ---Start watching the Git index for changes. Watches the git dir rather than
 ---the index file: git replaces the index by renaming `index.lock` over it,
 ---which a watch on the file itself loses. The kernel pushes the events, so an
----idle view costs no wakeups.
+---idle view costs no wakeups. The git dir watch is shared per repo.
 function DiffView:watch_index_start()
-  self.watcher = vim.loop.new_fs_event()
-
   -- One refresh per burst, and at most one a second: `git add` + `git reset`,
   -- or a tool running `git status` in a loop, each rewrite the index. The first
   -- refresh waits 150 ms for the rest of a burst.
   local scheduled, last = false, 0
 
-  self.watcher:start(self.adapter.ctx.dir, {}, function(err, filename)
+  self._unwatch_index = dir_watch.subscribe(self.adapter.ctx.dir, "index", function(err, filename)
     if err or filename ~= "index" or scheduled or self.watch_paused then return end
     scheduled = true
 
@@ -213,9 +212,9 @@ function DiffView:close()
       self.watch_augroup = nil
     end
 
-    if self.watcher then
-      self.watcher:stop()
-      self.watcher:close()
+    if self._unwatch_index then
+      self._unwatch_index()
+      self._unwatch_index = nil
     end
 
     for _, file in self.files:iter() do
