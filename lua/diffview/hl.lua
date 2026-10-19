@@ -681,11 +681,9 @@ function M.update_winbar_hl()
 end
 
 function M.update_diff_hl()
-  local fg = M.get_hl_attr("DiffDelete", hlattr.x_fg, true) or "NONE"
-  local bg = M.get_hl_attr("DiffDelete", hlattr.x_bg, true) or "NONE"
-  local style = M.get_style("DiffDelete", true) or "NONE"
-
-  M.hi("DiffviewDiffAddAsDelete", { fg = fg, bg = bg, style = style })
+  -- Follows DiffviewDiffDelete, and a user definition of either wins: a forced
+  -- copy of DiffDelete here overrode whatever the colorscheme set.
+  M.hi_link("DiffviewDiffAddAsDelete", "DiffviewDiffDelete", { default = true })
   M.hi_link("DiffviewDiffDeleteDim", "Comment", { default = true })
 
   M.update_file_sign_hl()
