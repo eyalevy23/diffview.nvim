@@ -261,23 +261,6 @@ function CountDownLatch:init(count)
   self.condvar = Condvar()
 end
 
-function CountDownLatch:count_down()
-  local permit = await(self.sem:acquire()) --[[@as Permit ]]
-
-  if self.counter == 0 then
-    -- The counter reached 0 while we were waiting for the permit
-    permit:forget()
-    return
-  end
-
-  self.counter = self.counter - 1
-  permit:forget()
-
-  if self.counter == 0 then
-    self.condvar:notify_all()
-  end
-end
-
 ---@override
 function CountDownLatch:await()
   if self.counter == 0 then return end

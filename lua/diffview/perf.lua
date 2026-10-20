@@ -76,17 +76,5 @@ function PerfTimer:__tostring()
   end
 end
 
----Get the relative performance difference in percent.
----@static
----@param a PerfTimer
----@param b PerfTimer
----@return string
-function PerfTimer.difference(a, b)
-  local delta = (b.final_time - a.final_time) / a.final_time
-  local negative = delta < 0
-
-  return string.format("%s%.2f%%", not negative and "+" or "", delta * 100)
-end
-
 M.PerfTimer = PerfTimer
 return M

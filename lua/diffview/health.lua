@@ -163,12 +163,6 @@ function M.check()
     else
       health.warn(link .. " exists but is not this plugin's symlink — leaving it to you.")
     end
-
-    local npx_copy = vim.fs.normalize("~/.agents/skills/" .. install.SKILL_LINK_NAME)
-    if uv.fs_stat(npx_copy) then
-      health.warn("standalone skill copy from `npx skills` at " .. npx_copy
-        .. " — its CLI can't run outside the plugin; remove it and use the plugin's copy.")
-    end
   end)()
 end
 

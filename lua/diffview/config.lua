@@ -6,29 +6,15 @@ local actions = require("diffview.actions")
 local lazy = require("diffview.lazy")
 
 local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Diff1|LazyModule
-local Diff1Inline = lazy.access("diffview.scene.layouts.diff_1_inline", "Diff1Inline") ---@type Diff1Inline|LazyModule
 local Diff1Unified = lazy.access("diffview.scene.layouts.diff_1_unified", "Diff1Unified") ---@type Diff1Unified|LazyModule
 local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Diff2|LazyModule
 local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
 local Diff3Hor = lazy.access("diffview.scene.layouts.diff_3_hor", "Diff3Hor") ---@type Diff3Hor|LazyModule
-local Diff3Mixed = lazy.access("diffview.scene.layouts.diff_3_mixed", "Diff3Mixed") ---@type Diff3Mixed|LazyModule
-local Diff3Ver = lazy.access("diffview.scene.layouts.diff_3_ver", "Diff3Ver") ---@type Diff3Hor|LazyModule
-local Diff4 = lazy.access("diffview.scene.layouts.diff_4", "Diff4") ---@type Diff4|LazyModule
-local Diff4Mixed = lazy.access("diffview.scene.layouts.diff_4_mixed", "Diff4Mixed") ---@type Diff4Mixed|LazyModule
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
 local M = {}
 
 local setup_done = false
-
----@deprecated
-function M.diffview_callback(cb_name)
-  if cb_name == "select" then
-    -- Reroute deprecated action
-    return actions.select_entry
-  end
-  return actions[cb_name]
-end
 
 ---@class ConfigLogOptions
 ---@field single_file LogOptions
@@ -194,7 +180,7 @@ M.defaults = {
       { "n", "g?", actions.help({ "view", "diff1" }), { desc = "Open the help panel" } },
     },
     diff2 = {
-      -- Mappings in 2-way diff layouts (the unified and inline layouts)
+      -- Mappings in 2-way diff layouts (the unified layout)
       { "n", "g?", actions.help({ "view", "diff2" }), { desc = "Open the help panel" } },
       { "n", "gm", actions.toggle_file_view,          { desc = "Toggle file view: whole file, change markers in the gutter" } },
     },
@@ -203,13 +189,6 @@ M.defaults = {
       { { "n", "x" }, "2do",  actions.diffget("ours"),            { desc = "Obtain the diff hunk from the OURS version of the file" } },
       { { "n", "x" }, "3do",  actions.diffget("theirs"),          { desc = "Obtain the diff hunk from the THEIRS version of the file" } },
       { "n",          "g?",   actions.help({ "view", "diff3" }),  { desc = "Open the help panel" } },
-    },
-    diff4 = {
-      -- Mappings in 4-way diff layouts
-      { { "n", "x" }, "1do",  actions.diffget("base"),            { desc = "Obtain the diff hunk from the BASE version of the file" } },
-      { { "n", "x" }, "2do",  actions.diffget("ours"),            { desc = "Obtain the diff hunk from the OURS version of the file" } },
-      { { "n", "x" }, "3do",  actions.diffget("theirs"),          { desc = "Obtain the diff hunk from the THEIRS version of the file" } },
-      { "n",          "g?",   actions.help({ "view", "diff4" }),  { desc = "Open the help panel" } },
     },
     file_panel = {
       { "n", "j",              actions.next_entry,                     { desc = "Bring the cursor to the next file entry" } },
@@ -410,21 +389,13 @@ function M.get_log_options(single_file, t, vcs)
 end
 
 ---@alias LayoutName "diff1_plain"
----       | "diff1_inline"
 ---       | "diff1_unified"
 ---       | "diff3_horizontal"
----       | "diff3_vertical"
----       | "diff3_mixed"
----       | "diff4_mixed"
 
 local layout_map = {
   diff1_plain = Diff1,
-  diff1_inline = Diff1Inline,
   diff1_unified = Diff1Unified,
   diff3_horizontal = Diff3Hor,
-  diff3_vertical = Diff3Ver,
-  diff3_mixed = Diff3Mixed,
-  diff4_mixed = Diff4Mixed,
 }
 
 ---@param layout_name LayoutName
@@ -444,8 +415,6 @@ function M.get_layout_keymaps(layout)
     return M._config.keymaps.diff2
   elseif layout:instanceof(Diff3.__get()) then
     return M._config.keymaps.diff3
-  elseif layout:instanceof(Diff4.__get()) then
-    return M._config.keymaps.diff4
   end
 end
 
@@ -521,94 +490,13 @@ function M.setup(user_config)
   ---@type EventEmitter
   M.user_emitter = EventEmitter()
 
-  --#region DEPRECATION NOTICES
-
-  if type(M._config.file_panel.use_icons) ~= "nil" then
-    utils.warn("'file_panel.use_icons' has been deprecated. See ':h diffview.changelog-64'.")
-  end
-
-  -- Move old panel preoperties to win_config
-  local old_win_config_spec = { "position", "width", "height" }
-  for _, panel_name in ipairs({ "file_panel", "file_history_panel" }) do
-    local panel_config = M._config[panel_name]
-    ---@cast panel_config table
-    local notified = false
-
-    for _, option in ipairs(old_win_config_spec) do
-      if panel_config[option] ~= nil then
-        if not notified then
-          utils.warn(
-            ("'%s.{%s}' has been deprecated. See ':h diffview.changelog-136'."):format(
-              panel_name,
-              fmt_enum(old_win_config_spec, true)
-            )
-          )
-          notified = true
-        end
-        panel_config.win_config[option] = panel_config[option]
-        panel_config[option] = nil
-      end
-    end
-  end
-
-  -- Move old keymaps
-  if user_config.key_bindings then
-    M._config.keymaps = vim.tbl_deep_extend("force", M._config.keymaps, user_config.key_bindings)
-    user_config.keymaps = user_config.key_bindings
-    M._config.key_bindings = nil
-  end
-
-  local user_log_options = utils.tbl_access(user_config, "file_history_panel.log_options")
-  if user_log_options then
-    local top_options = {
-      "single_file",
-      "multi_file",
-    }
-    for _, name in ipairs(top_options) do
-      if user_log_options[name] ~= nil then
-        utils.warn(
-          "Global config of 'file_panel.log_options' has been deprecated. See ':h diffview.changelog-271'."
-        )
-      end
-      break
-    end
-
-    local option_names = {
-      "max_count",
-      "follow",
-      "all",
-      "merges",
-      "no_merges",
-      "reverse",
-    }
-    for _, name in ipairs(option_names) do
-      if user_log_options[name] ~= nil then
-        utils.warn(
-          ("'file_history_panel.log_options.{%s}' has been deprecated. See ':h diffview.changelog-151'."):format(
-            fmt_enum(option_names, true)
-          )
-        )
-        break
-      end
-    end
-  end
-
-  --#endregion
-
   if #M._config.git_cmd == 0 then M._config.git_cmd = M.defaults.git_cmd end
 
   do
     -- Validate layouts
     local view = M._config.view
-    local standard_layouts = { "diff1_inline", "diff1_unified", -1 }
-    local merge_layuots = {
-      "diff1_plain",
-      "diff3_horizontal",
-      "diff3_vertical",
-      "diff3_mixed",
-      "diff4_mixed",
-      -1,
-    }
+    local standard_layouts = { "diff1_unified", -1 }
+    local merge_layuots = { "diff1_plain", "diff3_horizontal", -1 }
     local valid_layouts = {
       default = standard_layouts,
       merge_tool = merge_layuots,

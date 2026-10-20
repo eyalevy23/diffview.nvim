@@ -104,14 +104,6 @@ function M.index_for(adapter)
   return index_of(M.get_doc(store.path_for(adapter)))
 end
 
----All open threads for a repo-relative file path.
----@param adapter VCSAdapter
----@param file_path string
----@return integer open_count
-function M.count_for(adapter, file_path)
-  return M.index_for(adapter).open[file_path] or 0
-end
-
 ---Write through the store, stamping any threads we observed as outdated, then
 ---refresh every affected buffer. Non-blocking: lock contention is retried
 ---from the event loop. `opts.on_fail` runs if the write ultimately fails

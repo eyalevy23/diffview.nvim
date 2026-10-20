@@ -71,15 +71,6 @@ M.Waitable = Waitable
 ---@return any ... # Any values returned by the waitable
 function Waitable:await() oop.abstract_stub() end
 
----Schedule a callback to be invoked when this waitable has settled.
----@param callback function
-function Waitable:finally(callback)
-  (M.void(function()
-    local ret = tbl_pack(M.await(self))
-    callback(tbl_unpack(ret))
-  end))()
-end
-
 ---@class Future : Waitable
 ---@operator call : Future
 ---@field package thread thread
@@ -161,16 +152,6 @@ end
 ---@param ... any
 function Future:dprintf(...)
   self:dprint(fmt(...))
-end
-
----Start logging debug info about this future.
-function Future:watch()
-  M._watching[self] = true
-end
-
----Stop logging debug info about this future.
-function Future:unwatch()
-  M._watching[self] = nil
 end
 
 ---@package

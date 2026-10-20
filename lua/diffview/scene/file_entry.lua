@@ -251,7 +251,7 @@ function FileEntry:update_merge_context(ctx)
   ctx = ctx or self.merge_ctx
   if ctx then self.merge_ctx = ctx else return end
 
-  local layout = self.layout --[[@as Diff4 ]]
+  local layout = self.layout --[[@as Diff3 ]]
 
   if layout.a then
     layout.a.file.winbar = merge_winbar("OURS", "Ours", nil, ctx.ours)
@@ -263,10 +263,6 @@ function FileEntry:update_merge_context(ctx)
 
   if layout.c then
     layout.c.file.winbar = merge_winbar("THEIRS", "Theirs", nil, ctx.theirs)
-  end
-
-  if layout.d then
-    layout.d.file.winbar = merge_winbar("BASE", "Base", "common ancestor", ctx.base)
   end
 end
 

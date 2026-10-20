@@ -1,8 +1,7 @@
 -- Renders a unified (interleaved context/-/+ lines) diff of two source
 -- buffers into a read-only scratch buffer, and owns the per-buffer state
 -- mapping every rendered line back to its source line. All rendered lines are
--- REAL buffer lines (selectable, yankable, commentable) — unlike the
--- extmark-decorated inline layout.
+-- REAL buffer lines (selectable, yankable, commentable).
 --
 -- State is keyed by the scratch bufnr. Consumers (jump-to-edit, hunk nav, the
 -- comments layer) go through the accessors here rather than reaching into the

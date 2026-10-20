@@ -20,13 +20,9 @@ DEFAULT CONFIG                                  *diffview.defaults*
     view = {
       -- Configure the layout and behavior of different types of views.
       -- Available layouts:
-      --  'diff1_inline'
-      --    |'diff1_unified'
+      --  'diff1_unified'
       --    |'diff1_plain'
       --    |'diff3_horizontal'
-      --    |'diff3_vertical'
-      --    |'diff3_mixed'
-      --    |'diff4_mixed'
       -- For more info, see |diffview-config-view.x.layout|.
       default = {
         -- Config for changed files, and staged files in diff views.
@@ -138,13 +134,6 @@ DEFAULT CONFIG                                  *diffview.defaults*
         { { "n", "x" }, "2do",  actions.diffget("ours"),            { desc = "Obtain the diff hunk from the OURS version of the file" } },
         { { "n", "x" }, "3do",  actions.diffget("theirs"),          { desc = "Obtain the diff hunk from the THEIRS version of the file" } },
         { "n",          "g?",   actions.help({ "view", "diff3" }),  { desc = "Open the help panel" } },
-      },
-      diff4 = {
-        -- Mappings in 4-way diff layouts
-        { { "n", "x" }, "1do",  actions.diffget("base"),            { desc = "Obtain the diff hunk from the BASE version of the file" } },
-        { { "n", "x" }, "2do",  actions.diffget("ours"),            { desc = "Obtain the diff hunk from the OURS version of the file" } },
-        { { "n", "x" }, "3do",  actions.diffget("theirs"),          { desc = "Obtain the diff hunk from the THEIRS version of the file" } },
-        { "n",          "g?",   actions.help({ "view", "diff4" }),  { desc = "Open the help panel" } },
       },
       file_panel = {
         { "n", "j",              actions.next_entry,                     { desc = "Bring the cursor to the next file entry" } },

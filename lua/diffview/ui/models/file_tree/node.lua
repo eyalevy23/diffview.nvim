@@ -123,21 +123,6 @@ function Node:first_leaf()
 end
 
 ---@return Node?
-function Node:last_leaf()
-  if #self.children == 0 then
-    return
-  end
-
-  local cur = self
-
-  while cur:has_children() do
-    cur = cur.children[#cur.children]
-  end
-
-  return cur
-end
-
----@return Node?
 function Node:next_leaf()
   if not self.parent then
     return
@@ -156,24 +141,6 @@ function Node:next_leaf()
 end
 
 ---@return Node?
-function Node:prev_leaf()
-  if not self.parent then
-    return
-  end
-
-  local cur = self:has_children() and self:group_parent() or self
-  local sibling = cur:prev_sibling()
-
-  if sibling then
-    if not sibling:has_children() then
-      return sibling
-    else
-      return sibling:last_leaf()
-    end
-  end
-end
-
----@return Node?
 function Node:next_sibling()
   if not self.parent then
     return
@@ -183,19 +150,6 @@ function Node:next_sibling()
 
   if i > -1 and  i < #self.parent.children then
     return self.parent.children[i + 1]
-  end
-end
-
----@return Node?
-function Node:prev_sibling()
-  if not self.parent then
-    return
-  end
-
-  local i = utils.vec_indexof(self.parent.children, self)
-
-  if i > 1 and #self.parent.children > 1 then
-    return self.parent.children[i - 1]
   end
 end
 

@@ -417,20 +417,6 @@ function M.set_local(winids, option_map, opt)
   end
 end
 
----@param winids number[]|number Either a list of winids, or a single winid (0 for current window).
----@param option string
-function M.unset_local(winids, option)
-  if type(winids) ~= "table" then
-    winids = { winids }
-  end
-
-  for _, id in ipairs(winids) do
-    api.nvim_win_call(id, function()
-      vim.opt_local[option] = nil
-    end)
-  end
-end
-
 ---Get a list of all non-floating windows in a given tabpage.
 ---@param tabid integer
 ---@return integer[]
@@ -496,12 +482,6 @@ function M.tbl_unpack(t, i, j)
   return unpack(t, i or 1, j or t.n or table.maxn(t))
 end
 
-function M.tbl_clear(t)
-  for k, _ in pairs(t) do
-    t[k] = nil
-  end
-end
-
 ---Try property access.
 ---@param t table
 ---@param table_path string|any[] Either a `.` separated string of table keys, or a list.
@@ -521,43 +501,6 @@ function M.tbl_access(t, table_path)
   end
 
   return cur
-end
-
----Deep extend a table, and also perform a union on all sub-tables.
----@param t table
----@param ... table
----@return table
-function M.tbl_deep_union_extend(t, ...)
-  local res = M.tbl_clone(t)
-
-  local function recurse(ours, theirs)
-    -- Get the union of the two tables
-    local sub = M.vec_union(ours, theirs)
-
-    for k, v in pairs(ours) do
-      if type(k) ~= "number" then
-        sub[k] = v
-      end
-    end
-
-    for k, v in pairs(theirs) do
-      if type(k) ~= "number" then
-        if type(v) == "table" then
-          sub[k] = recurse(sub[k] or {}, v)
-        else
-          sub[k] = v
-        end
-      end
-    end
-
-    return sub
-  end
-
-  for _, theirs in ipairs({ ... }) do
-    res = recurse(res, theirs)
-  end
-
-  return res
 end
 
 function M.tbl_merge(t, ...)
@@ -690,16 +633,6 @@ function M.vec_slice(t, first, last)
   return slice
 end
 
----Return all elements in `t` between `first` and `last`. Negative numbers
----indexes from the end.
----@param t vector
----@param first integer First index, inclusive
----@param last? integer Last index, inclusive
----@return any ...
-function M.vec_select(t, first, last)
-  return unpack(M.vec_slice(t, first, last))
-end
-
 ---Join multiple vectors into one.
 ---@param ... any
 ---@return vector
@@ -719,92 +652,6 @@ function M.vec_join(...)
         end
         n = n + #args[i]
       end
-    end
-  end
-
-  return result
-end
-
----Get the result of the union of the given vectors.
----@param ... vector
----@return vector
-function M.vec_union(...)
-  local result = {}
-  local args = {...}
-  local seen = {}
-
-  for i = 1, select("#", ...) do
-    if type(args[i]) ~= "nil" then
-      if type(args[i]) ~= "table" and not seen[args[i]] then
-        seen[args[i]] = true
-        result[#result + 1] = args[i]
-      else
-        for _, v in ipairs(args[i]) do
-          if not seen[v] then
-            seen[v] = true
-            result[#result + 1] = v
-          end
-        end
-      end
-    end
-  end
-
-  return result
-end
-
----Get the result of the difference of the given vectors.
----@param ... vector
----@return vector
-function M.vec_diff(...)
-  local args = {...}
-  local seen = {}
-
-  for i = 1, select("#", ...) do
-    if type(args[i]) ~= "nil" then
-      if type(args[i]) ~= "table" then
-        if i == 1  then
-          seen[args[i]] = true
-        elseif seen[args[i]] then
-          seen[args[i]] = nil
-        end
-      else
-        for _, v in ipairs(args[i]) do
-          if i == 1 then
-            seen[v] = true
-          elseif seen[v] then
-            seen[v] = nil
-          end
-        end
-      end
-    end
-  end
-
-  return vim.tbl_keys(seen)
-end
-
----Get the result of the symmetric difference of the given vectors.
----@param ... vector
----@return vector
-function M.vec_symdiff(...)
-  local result = {}
-  local args = {...}
-  local seen = {}
-
-  for i = 1, select("#", ...) do
-    if type(args[i]) ~= "nil" then
-      if type(args[i]) ~= "table" then
-        seen[args[i]] = seen[args[i]] == 1 and 0 or 1
-      else
-        for _, v in ipairs(args[i]) do
-          seen[v] = seen[v] == 1 and 0 or 1
-        end
-      end
-    end
-  end
-
-  for v, state in pairs(seen) do
-    if state == 1 then
-      result[#result+1] = v
     end
   end
 
@@ -838,22 +685,6 @@ function M.vec_push(t, ...)
   end
 
   return t
-end
-
----Remove an object from a vector.
----@param t vector
----@param v any
----@return boolean success True if the object was removed.
-function M.vec_remove(t, v)
-  local idx = M.vec_indexof(t, v)
-
-  if idx > -1 then
-    table.remove(t, idx)
-
-    return true
-  end
-
-  return false
 end
 
 ---Non-mutative vector sort.
@@ -1146,41 +977,6 @@ end
 ---@field allow_non_ascii boolean (default: true)
 ---@field prompt_hl string (default: nil)
 
----@param prompt string
----@param opt InputCharSpec
----@return string? Char
----@return string Raw
-function M.input_char(prompt, opt)
-  opt = vim.tbl_extend("keep", opt or {}, {
-    clear_prompt = true,
-    allow_non_ascii = false,
-    prompt_hl = nil,
-  }) --[[@as InputCharSpec ]]
-
-  if prompt then
-    vim.api.nvim_echo({ { prompt, opt.prompt_hl } }, false, {})
-  end
-
-  local c
-  if not opt.allow_non_ascii then
-    while type(c) ~= "number" do
-      c = vim.fn.getchar()
-    end
-  else
-    c = vim.fn.getchar()
-  end
-
-  if opt.clear_prompt then
-    M.clear_prompt()
-  end
-
-  local s = type(c) == "number" and vim.fn.nr2char(c) or nil
-  ---@type string
-  local raw = type(c) == "number" and s or c
-
-  return s, raw
-end
-
 ---@class InputSpec
 ---@field default string
 ---@field completion string|function
@@ -1203,18 +999,6 @@ function M.input(prompt, opt)
     cancelreturn = opt.cancelreturn or "__INPUT_CANCELLED__",
   }, opt.callback)
   M.clear_prompt()
-end
-
-function M.raw_key(vim_key)
-  return api.nvim_eval(string.format([["\%s"]], vim_key))
-end
-
-function M.pause(msg)
-  vim.cmd("redraw")
-  M.input_char(
-    "-- PRESS ANY KEY TO CONTINUE -- " .. (msg or ""),
-    { allow_non_ascii = true, prompt_hl = "Directory" }
-  )
 end
 
 ---Open a temporary 1x1 floating window.

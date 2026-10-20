@@ -109,10 +109,9 @@ COMMANDS                                        *diffview-commands*
         You can jump between conflict markers with `]x` and `[x`. This works
         from the file panel as well. Further, in addition to the normal
         |copy-diffs| mappings you can use `2do` to obtain the hunk from the
-        OURS side of the diff, `3do` to obtain the hunk from the THEIRS side
-        of the diff, and - in a 4-way diff - `1do` to obtain the hunk from the
-        BASE. See |diffview-conflict-versions| to tell what windows correspond
-        with what version of the file.
+        OURS side of the diff, and `3do` to obtain the hunk from the THEIRS
+        side of the diff. See |diffview-conflict-versions| to tell what
+        windows correspond with what version of the file.
 
         Additionally there are mappings for operating directly on the conflict
         markers:
@@ -127,12 +126,10 @@ COMMANDS                                        *diffview-commands*
         For more info on these actions, see
         |diffview-actions-conflict_choose|.
 
-        NOTE: The horizontal 3-way diff is only the default layout for the
-        merge-tool, but there are multiple variations on the 3-way diff layout
-        as well as a 4-way diff, and a single window layout available. The
-        default mapping `g<C-x>` allows you to cycle through the available
-        layouts. To configure a different default layout, see
-        |diffview-config-view.x.layout|.
+        NOTE: The horizontal 3-way diff is the default layout for the
+        merge-tool; a single plain window is also available. The default
+        mapping `g<C-x>` cycles between them. To configure the default
+        layout, see |diffview-config-view.x.layout|.
 
     Options: ~
         -u[value], --untracked-files[={value}]
@@ -401,13 +398,9 @@ git_cmd                                         *diffview-config-git_cmd*
 
 view.x.layout                                   *diffview-config-view.x.layout*
         Type: >
-            "diff1_inline"
-                | "diff1_unified"
+            "diff1_unified"
                 | "diff1_plain"
                 | "diff3_horizontal"
-                | "diff3_vertical"
-                | "diff3_mixed"
-                | "diff4_mixed"
                 | -1
 <
         Default: (see defaults)
@@ -415,15 +408,14 @@ view.x.layout                                   *diffview-config-view.x.layout*
         This determines the layout used for diffs in the various different
         views. Some of the layouts are only applicable to certain types of
         views. The valid layouts for `view.default` and `view.file_history`
-        are `"diff1_inline"`, `"diff1_unified"` and `-1`. The remaining
-        layouts are for `view.merge_tool`.
+        are `"diff1_unified"` and `-1`. The remaining layouts are for
+        `view.merge_tool`.
 
-        If you set the layout to `-1`, the default layout is used. For the
-        merge-tool the layout type is then derived from your |'diffopt'|
-        (more specifically: whether or not you have `vertical` set).
+        If you set the layout to `-1`, the default layout is used:
+        `"diff1_unified"`, or `"diff3_horizontal"` for the merge-tool.
 
         Layouts: ~
-            Unless otherwise stated, the window symbols (A, B, C, D) represent
+            Unless otherwise stated, the window symbols (A, B, C) represent
             the following versions of a file:
 
             In the diff_view and file_history_view:
@@ -435,7 +427,6 @@ view.x.layout                                   *diffview-config-view.x.layout*
               • A: OURS (current branch)
               • B: LOCAL (the file as it currently exists on disk)
               • C: THEIRS (incoming branch)
-              • D: BASE (common ancestor)
 
                                                 *diffview-layouts*
             {diff1_plain}
@@ -444,21 +435,6 @@ view.x.layout                                   *diffview-config-view.x.layout*
                 This is a plain, singular window. This is available in case
                 you prefer to edit conflict markers manually without the
                 visual noise from diffs.
-
-                ┌──────────────┐
-                │              │
-                │              │
-                │      B       │
-                │              │
-                │              │
-                └──────────────┘
-
-            {diff1_inline}
-                Available for: diff_view, file_history_view
-
-                A single window showing the new version of the file, with
-                deleted lines rendered inline as virtual lines, and
-                word-level diff highlights.
 
                 ┌──────────────┐
                 │              │
@@ -544,39 +520,6 @@ view.x.layout                                   *diffview-config-view.x.layout*
                 │    │    │    │
                 │    │    │    │
                 └────┴────┴────┘
-
-            {diff3_vertical}
-                Available for: merge_tool
-
-                ┌──────────────┐
-                │      A       │
-                ├──────────────┤
-                │      B       │
-                ├──────────────┤
-                │      C       │
-                └──────────────┘
-
-            {diff3_mixed}
-                Available for: merge_tool
-
-                ┌──────┬───────┐
-                │  A   │   C   │
-                │      │       │
-                ├──────┴───────┤
-                │      B       │
-                │              │
-                └──────────────┘
-
-            {diff4_mixed}
-                Available for: merge_tool
-
-                ┌────┬────┬────┐
-                │ A  │ D  │ C  │
-                │    │    │    │
-                ├────┴────┴────┤
-                │      B       │
-                │              │
-                └──────────────┘
 
 view.x.winbar_info                              *diffview-config-view.x.winbar_info*
         Type: `boolean`, Default: (see defaults)

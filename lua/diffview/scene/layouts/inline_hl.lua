@@ -1,5 +1,5 @@
--- Shared intra-line diff + per-line Treesitter highlight helpers, used by the
--- single-window diff layouts (Diff1Inline, Diff1Unified).
+-- Intra-line diff + per-line Treesitter highlight helpers for the unified
+-- layout (unified_render.lua).
 
 local diff_mod = require("diffview.diff")
 local Diff = diff_mod.Diff

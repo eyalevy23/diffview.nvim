@@ -468,19 +468,6 @@ function Panel:on_autocmd(event, opts)
   end
 end
 
----Unsubscribe an autocmd listener. If no event is given, the callback is
----disabled for all events.
----@param callback function
----@param event? string
-function Panel:off_autocmd(callback, event)
-  for e, cbs in pairs(self.au_event_map) do
-    if (event == nil or event == e) and utils.vec_indexof(cbs, callback) ~= -1 then
-      Panel.au.emitter:off(callback, event)
-    end
-    Panel.au.prune()
-  end
-end
-
 function Panel:get_default_config(panel_type)
   local producer = self.class["default_config_" .. (panel_type or self.class.default_type)]
 
@@ -498,13 +485,6 @@ end
 function Panel:get_width()
   if self:is_open() then
     return api.nvim_win_get_width(self.winid)
-  end
-end
-
----@return integer?
-function Panel:get_height()
-  if self:is_open() then
-    return api.nvim_win_get_height(self.winid)
   end
 end
 
@@ -532,32 +512,6 @@ function Panel:infer_width()
   end
 
   return math.floor(vim.o.columns / 2)
-end
-
-function Panel:infer_height()
-  local cur_height = self:get_height()
-  if cur_height then return cur_height end
-
-  local config = self:get_config()
-  if config.height then return config.height end
-
-  -- PanelFloatSpec requires both width and height to be defined. If we get
-  -- here then the panel is a split.
-  ---@cast config PanelSplitSpec
-
-  if config.win and api.nvim_win_is_valid(config.win) then
-    if self.state.form == "row" then
-      return math.floor(api.nvim_win_get_height(config.win) / 2)
-    elseif self.state.form == "column" then
-      return api.nvim_win_get_height(config.win)
-    end
-  end
-
-  if self.state.form == "row" then
-    return math.floor(vim.o.lines / 2)
-  end
-
-  return vim.o.lines
 end
 
 function Panel.next_uid()

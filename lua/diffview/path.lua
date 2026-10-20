@@ -87,13 +87,6 @@ function PathLib:is_uri(path)
   return string.match(path, "^%w+://") ~= nil
 end
 
----Get the URI scheme of a given URI.
----@param path string
----@return string
-function PathLib:get_uri_scheme(path)
-  return string.match(path, "^(%w+://)")
-end
-
 ---Change the path separators in a path. Removes duplicate separators.
 ---@param path string
 ---@param sep? "/"|"\\"
@@ -121,13 +114,6 @@ function PathLib:convert(path, sep)
   p, _ = p:gsub("[\\/]+", sep)
 
   return (prefix or "") .. p
-end
-
----Convert a path to use the appropriate path separators for the current OS.
----@param path string
----@return string
-function PathLib:to_os(path)
-  return self:convert(path, self._is_windows and "\\" or "/")
 end
 
 ---Check if a given path is absolute.

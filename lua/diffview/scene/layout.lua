@@ -257,13 +257,6 @@ function Layout:ensure()
   end
 end
 
----Save window local options.
-function Layout:save_winopts()
-  for _, win in ipairs(self.windows) do
-    win:_save_winopts()
-  end
-end
-
 ---Restore saved window local options.
 function Layout:restore_winopts()
   for _, win in ipairs(self.windows) do

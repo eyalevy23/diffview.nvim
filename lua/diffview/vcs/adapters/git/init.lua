@@ -77,11 +77,6 @@ function GitAdapter.pathspec_expand(toplevel, cwd, pathspec)
   return magic .. pl:convert(pattern)
 end
 
-function GitAdapter.pathspec_modify(pathspec, mods)
-  local magic, pattern = GitAdapter.pathspec_split(pathspec)
-  return magic .. pl:vim_fnamemodify(pattern, mods)
-end
-
 function GitAdapter.run_bootstrap()
   local git_cmd = config.get_config().git_cmd
   local bs = GitAdapter.bootstrap

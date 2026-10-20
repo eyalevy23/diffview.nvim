@@ -130,20 +130,6 @@ function Object:ancestorof(other)
   return other:instanceof(self)
 end
 
----@return string
-function Object:classpath()
-  classm_safeguard(self)
-  local ret = self.__name
-  local cur = self.super_class
-
-  while cur do
-    ret = cur.__name .. "." .. ret
-    cur = cur.super_class
-  end
-
-  return ret
-end
-
 -- ### INSTANCE METHODS ###
 
 ---Call constructor.

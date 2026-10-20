@@ -168,23 +168,6 @@ function VCSAdapter:exec_sync(args, cwd_or_opt)
 end
 
 
----@param thread thread
----@param ok boolean
----@param result any
----@return boolean ok
----@return any result
-function VCSAdapter:handle_co(thread, ok, result)
-  if not ok then
-    local err_msg = utils.vec_join(
-      "Coroutine failed!",
-      debug.traceback(thread, result, 1)
-    )
-    utils.err(err_msg, true)
-    logger:error(table.concat(err_msg, "\n"))
-  end
-  return ok, result
-end
-
 -- File History
 
 ---@diagnostic disable: unused-local, missing-return

@@ -445,40 +445,6 @@ function M.parse_diff(lines)
   return ret
 end
 
----Build either the old or the new version of a diff hunk.
----@param hunk diff.Hunk
----@param version "old"|"new"
----@return string[]
-function M.diff_build_hunk(hunk, version)
-  local vcontent = version == "old" and hunk.old_content or hunk.new_content
-  local size = version == "old" and hunk.old_size or hunk.new_size
-  local common_idx = 1
-  local chunk_idx = 1
-
-  local ret = {}
-  local i = 1
-
-  while i <= size do
-    local chunk = vcontent[chunk_idx]
-
-    if chunk and chunk[1] == i then
-      for _, line in ipairs(chunk[2]) do
-        ret[#ret + 1] = line
-      end
-
-      i = i + (#chunk[2] - 1)
-      chunk_idx = chunk_idx + 1
-    else
-      ret[#ret + 1] = hunk.common_content[common_idx]
-      common_idx = common_idx + 1
-    end
-
-    i = i + 1
-  end
-
-  return ret
-end
-
 local CONFLICT_START = [[^<<<<<<< ]]
 local CONFLICT_BASE = [[^||||||| ]]
 local CONFLICT_SEP = [[^=======$]]

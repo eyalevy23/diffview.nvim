@@ -40,27 +40,6 @@ local function wrap(timer, fn)
   })
 end
 
----Debounces a function on the leading edge.
----@param ms integer Timeout in ms
----@param fn function Function to debounce
----@return ManagedFn # Debounced function.
-function M.debounce_leading(ms, fn)
-  local timer = assert(uv.new_timer())
-  local lock = false
-
-  return wrap(timer, function(...)
-    timer:start(ms, 0, function()
-      timer:stop()
-      lock = false
-    end)
-
-    if not lock then
-      lock = true
-      fn(...)
-    end
-  end)
-end
-
 ---Debounces a function on the trailing edge.
 ---@param ms integer Timeout in ms
 ---@param rush_first boolean If the managed fn is called and it's not recovering from a debounce: call the fn immediately.
@@ -91,27 +70,6 @@ function M.debounce_trailing(ms, rush_first, fn)
   end)
 
   return debounced_fn
-end
-
----Throttles a function on the leading edge.
----@param ms integer Timeout in ms
----@param fn function Function to throttle
----@return ManagedFn # throttled function.
-function M.throttle_leading(ms, fn)
-  local timer = assert(uv.new_timer())
-  local lock = false
-
-  return wrap(timer, function(...)
-    if not lock then
-      timer:start(ms, 0, function()
-        lock = false
-        timer:stop()
-      end)
-
-      lock = true
-      fn(...)
-    end
-  end)
 end
 
 ---Throttles a function on the trailing edge.
@@ -194,30 +152,6 @@ function M.throttle_render(framerate, fn)
   end)
 
   return throttled_fn
-end
-
----Repeatedly call `func` with a fixed time delay.
----@param func function
----@param delay integer # Delay between executions (ms)
----@return Closeable
-function M.set_interval(func, delay)
-  local timer = assert(uv.new_timer())
-
-  local ret = {
-    close = function()
-      timer:stop()
-      M.try_close(timer)
-    end,
-  }
-
-  timer:start(delay, delay, function()
-    local should_close = func()
-    if type(should_close) == "boolean" and should_close then
-      ret.close()
-    end
-  end)
-
-  return ret
 end
 
 ---Call `func` after a fixed time delay.

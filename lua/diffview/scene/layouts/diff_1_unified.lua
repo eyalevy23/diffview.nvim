@@ -1,8 +1,8 @@
 -- Single-window unified diff layout. The visible window shows a synthetic
 -- read-only scratch buffer where context / added / deleted lines are all real
 -- buffer lines (rendered by scene/layouts/unified_render.lua). The `a` and
--- `b` windows exist only as hidden data carriers, exactly like `a` in
--- Diff1Inline. Editing happens in the real file via the jump-to-edit action.
+-- `b` windows exist only as hidden data carriers. Editing happens in the real
+-- file via the jump-to-edit action.
 
 local async = require("diffview.async")
 local lazy = require("diffview.lazy")

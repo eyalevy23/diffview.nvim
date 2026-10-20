@@ -116,7 +116,6 @@ end
 
 utils.add_reverse_lookup(M.HlAttribute)
 utils.add_reverse_lookup(style_attrs)
-local hlattr = M.HlAttribute
 
 ---@param name string Syntax group name.
 ---@param no_trans? boolean Don't translate the syntax group (follow links).
@@ -156,20 +155,6 @@ function M.get_hl(name, no_trans)
 
     return hl
   end
-end
-
----@param name string Syntax group name.
----@param attr HlAttribute|string Attribute kind.
----@param no_trans? boolean Don't translate the syntax group (follow links).
----@return hl.HlAttrValue?
-function M.get_hl_attr(name, attr, no_trans)
-  local hl = M.get_hl(name, no_trans)
-
-  if type(attr) == "string" then attr = hlattr[attr] end
-
-  if not (hl and attr) then return end
-
-  return hl[hlattr[attr]]
 end
 
 ---@param groups string|string[] Syntax group name, or an ordered list of
@@ -215,32 +200,6 @@ end
 ---@return string?
 function M.get_bg(groups, no_trans)
   return M.get_displayed(groups, "bg", no_trans)
-end
-
----@param groups string|string[] Syntax group name, or an ordered list of
----groups where the first found value will be returned.
----@param no_trans? boolean Don't translate the syntax group (follow links).
----@return string?
-function M.get_style(groups, no_trans)
-  no_trans = not not no_trans
-  if type(groups) ~= "table" then groups = { groups } end
-
-  for _, group in ipairs(groups) do
-    local hl = M.get_hl(group, no_trans)
-
-    if hl then
-      local res = {}
-
-      for _, attr in ipairs(style_attrs) do
-        if hl[attr] then table.insert(res, attr)
-        end
-
-        if #res > 0 then
-          return table.concat(res, ",")
-        end
-      end
-    end
-  end
 end
 
 ---@param spec hl.HiSpec
@@ -338,24 +297,6 @@ function M.hi_link(from, to, opt)
       -- attributes are not affected.
       M.hi(f, { default = opt.default, link = to })
     end
-  end
-end
-
----Clear highlighting for a given syntax group, or all groups if no group is
----given.
----@param groups? string|string[]
-function M.hi_clear(groups)
-  if not groups then
-    vim.cmd("hi clear")
-    return
-  end
-
-  if type(groups) ~= "table" then
-    groups = { groups }
-  end
-
-  for _, g in ipairs(groups) do
-    api.nvim_set_hl(0, g, {})
   end
 end
 

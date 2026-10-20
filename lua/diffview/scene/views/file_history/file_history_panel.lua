@@ -362,20 +362,6 @@ function FileHistoryPanel:set_cur_item(new_item)
   end
 end
 
-function FileHistoryPanel:set_entry_from_file(item)
-  local file = self.cur_item[2]
-
-  if item:instanceof(LogEntry.__get()) then
-    self:set_cur_item({ item, item.files[1] })
-  else
-    local entry = self:find_entry(file)
-
-    if entry then
-      self:set_cur_item({ entry, file })
-    end
-  end
-end
-
 function FileHistoryPanel:cur_file()
   return self.cur_item[2]
 end

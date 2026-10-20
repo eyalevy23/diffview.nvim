@@ -162,14 +162,6 @@ function M.get_current_view()
   return nil
 end
 
-function M.tabpage_to_view(tabpage)
-  for _, view in ipairs(M.views) do
-    if view.tabpage == tabpage then
-      return view
-    end
-  end
-end
-
 ---Get the first tabpage that is not a view. Tries the previous tabpage first.
 ---If there are no non-view tabpages: returns nil.
 ---@return number|nil

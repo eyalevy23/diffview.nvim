@@ -4,7 +4,6 @@ local lazy = require("diffview.lazy")
 local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Diff1|LazyModule
 local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Diff2|LazyModule
 local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
-local Diff4 = lazy.access("diffview.scene.layouts.diff_4", "Diff4") ---@type Diff4|LazyModule
 local Panel = lazy.access("diffview.ui.panel", "Panel") ---@type Panel|LazyModule
 local View = lazy.access("diffview.scene.view", "View") ---@type View|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
@@ -36,7 +35,6 @@ function StandardView:init(opt)
     diff1 = { a = {} },
     diff2 = { a = {}, b = {} },
     diff3 = { a = {}, b = {}, c = {} },
-    diff4 = { a = {}, b = {}, c = {}, d = {} },
   }
 
   self.emitter:on("post_layout", utils.bind(self.post_layout, self))
@@ -123,8 +121,6 @@ StandardView.use_entry = async.void(function(self, entry)
     layout_key = "diff2"
   elseif entry.layout:instanceof(Diff3.__get()) then
     layout_key = "diff3"
-  elseif entry.layout:instanceof(Diff4.__get()) then
-    layout_key = "diff4"
   end
 
   for _, sym in ipairs({ "a", "b", "c", "d" }) do

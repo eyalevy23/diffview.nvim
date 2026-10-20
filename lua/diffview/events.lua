@@ -99,23 +99,6 @@ function EventEmitter:on_any(callback)
   })
 end
 
----Add a new one-shot any-listener, subscribed to all events.
----@param callback ListenerCallback
-function EventEmitter:once_any(callback)
-  local emitted = false
-
-  table.insert(self.any_listeners, 1, {
-    type = "any_once",
-    callback = callback,
-    call = function(event, args)
-      if not emitted then
-        emitted = true
-        return callback(event, utils.tbl_unpack(args))
-      end
-    end,
-  })
-end
-
 ---Unsubscribe a listener. If no event is given, the listener is unsubscribed
 ---from all events.
 ---@param callback function

@@ -6,8 +6,7 @@
 -- through here instead of reading buffer names or raw row numbers.
 --
 -- The returned shape is a stable contract for external callers. Caveats:
--- - The inline layout keeps no hunks, so each call there diffs the whole file
---   (~5 ms for a 5000-line file). The unified layout reads its line map.
+-- - The unified layout reads its line map, so calls are cheap.
 -- - For commit and file-history entries the line numbers are that revision's,
 --   while `abs` / `rel` name the file in the working tree.
 
@@ -105,20 +104,6 @@ function M.at_cursor(opts)
     local st = unified.state[bufnr]
     if not st then return end
     lines = collect(st.line_map, api.nvim_buf_get_lines(bufnr, s - 1, e, false), s, e, s - 1)
-  elseif layout.name == "diff1_inline" then
-    -- The window shows the new file; deletions are virtual lines. Map through
-    -- the same builder the unified layout uses so a range that spans a
-    -- deletion carries its "-" lines too.
-    local a = layout.a.file
-    local old = {}
-    if a and a:is_valid() and not a.nulled then
-      old = api.nvim_buf_get_lines(a.bufnr, 0, -1, false)
-    end
-    local new = api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local text, st = unified.build(old, new)
-    local r1, r2 = st.row_of_new[s], st.row_of_new[e]
-    if not (r1 and r2) then return end
-    lines = collect(st.line_map, text, r1, r2, 0)
   elseif file.symbol == "a" or file.symbol == "b" then
     -- Merge-tool windows (ours / working copy): rows are source lines.
     lines = {}

@@ -208,9 +208,8 @@ their own section. When opening a conflicted file, it will open in a 3-way diff
 allowing you to resolve the merge conflicts with the context of the target
 branch's version, as well as the version from the branch which is being merged.
 
-The 3-way diff is only the default layout for merge conflicts. There are
-multiple variations on this layout, a 4-way diff layout, and a single window
-layout available.
+The 3-way diff is the default layout for merge conflicts; `g<C-x>` switches to
+a single plain window with just the conflict markers.
 
 In addition to the normal `:h copy-diffs` mappings, there are default mappings
 provided for jumping between conflict markers, obtaining a hunk directly from
@@ -328,12 +327,6 @@ Examples:
 
 <br>
 
-> [!NOTE]
-> Additionally check out [USAGE](USAGE.md) for examples of some more specific
-> use-cases.
-
-<br>
-
 ---
 
 ## Configuration
@@ -365,13 +358,9 @@ require("diffview").setup({
   view = {
     -- Configure the layout and behavior of different types of views.
     -- Available layouts:
-    --  'diff1_inline'
-    --    |'diff1_unified'
+    --  'diff1_unified'
     --    |'diff1_plain'
     --    |'diff3_horizontal'
-    --    |'diff3_vertical'
-    --    |'diff3_mixed'
-    --    |'diff4_mixed'
     -- For more info, see |diffview-config-view.x.layout|.
     default = {
       -- Config for changed files, and staged files in diff views.
@@ -484,13 +473,6 @@ require("diffview").setup({
       { { "n", "x" }, "2do",  actions.diffget("ours"),            { desc = "Obtain the diff hunk from the OURS version of the file" } },
       { { "n", "x" }, "3do",  actions.diffget("theirs"),          { desc = "Obtain the diff hunk from the THEIRS version of the file" } },
       { "n",          "g?",   actions.help({ "view", "diff3" }),  { desc = "Open the help panel" } },
-    },
-    diff4 = {
-      -- Mappings in 4-way diff layouts
-      { { "n", "x" }, "1do",  actions.diffget("base"),            { desc = "Obtain the diff hunk from the BASE version of the file" } },
-      { { "n", "x" }, "2do",  actions.diffget("ours"),            { desc = "Obtain the diff hunk from the OURS version of the file" } },
-      { { "n", "x" }, "3do",  actions.diffget("theirs"),          { desc = "Obtain the diff hunk from the THEIRS version of the file" } },
-      { "n",          "g?",   actions.help({ "view", "diff4" }),  { desc = "Open the help panel" } },
     },
     file_panel = {
       { "n", "j",              actions.next_entry,                     { desc = "Bring the cursor to the next file entry" } },

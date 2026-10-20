@@ -12,14 +12,9 @@ local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 local vcs_utils = lazy.require("diffview.vcs.utils") ---@module "diffview.vcs.utils"
 
 local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Diff1|LazyModule
-local Diff1Inline = lazy.access("diffview.scene.layouts.diff_1_inline", "Diff1Inline") ---@type Diff1Inline|LazyModule
 local Diff1Unified = lazy.access("diffview.scene.layouts.diff_1_unified", "Diff1Unified") ---@type Diff1Unified|LazyModule
 local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
 local Diff3Hor = lazy.access("diffview.scene.layouts.diff_3_hor", "Diff3Hor") ---@type Diff3Hor|LazyModule
-local Diff3Ver = lazy.access("diffview.scene.layouts.diff_3_ver", "Diff3Ver") ---@type Diff3Hor|LazyModule
-local Diff3Mixed = lazy.access("diffview.scene.layouts.diff_3_mixed", "Diff3Mixed") ---@type Diff3Mixed|LazyModule
-local Diff4 = lazy.access("diffview.scene.layouts.diff_4", "Diff4") ---@type Diff4|LazyModule
-local Diff4Mixed = lazy.access("diffview.scene.layouts.diff_4_mixed", "Diff4Mixed") ---@type Diff4Mixed|LazyModule
 
 local api = vim.api
 local await = async.await
@@ -663,17 +658,6 @@ local function diff_copy_target(kind)
       elseif kind == "local" then
         bufnr = layout.b.file.bufnr
       end
-    elseif layout:instanceof(Diff4.__get()) then
-      ---@cast layout Diff4
-      if kind == "ours" then
-        bufnr = layout.a.file.bufnr
-      elseif kind == "theirs" then
-        bufnr = layout.c.file.bufnr
-      elseif kind == "base" then
-        bufnr = layout.d.file.bufnr
-      elseif kind == "local" then
-        bufnr = layout.b.file.bufnr
-      end
     end
 
     if bufnr then return bufnr end
@@ -830,13 +814,9 @@ function M.cycle_layout()
   local layout_cycles = {
     standard = {
       Diff1Unified.__get(),
-      Diff1Inline.__get(),
     },
     merge_tool = {
       Diff3Hor.__get(),
-      Diff3Ver.__get(),
-      Diff3Mixed.__get(),
-      Diff4Mixed.__get(),
       Diff1.__get(),
     }
   }

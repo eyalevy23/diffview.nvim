@@ -6,12 +6,6 @@ local M = setmetatable({}, { __index = ffi })
 
 local HAS_NVIM_0_9 = vim.fn.has("nvim-0.9") == 1
 
----Check if the |textlock| is active.
----@return boolean
-function M.nvim_is_textlocked()
-  return C.textlock > 0
-end
-
 ---Check if the nvim API is locked for any reason.
 ---See: |api-fast|, |textlock|
 ---@return boolean
