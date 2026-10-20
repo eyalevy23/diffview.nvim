@@ -993,7 +993,7 @@ diffget({target})                               *diffview-actions-diffget*
         Obtain the hunk from a particular version of the current file.
 
         Parameters: ~
-            {target} `'ours'|'theirs'|'base'|'local'`
+            {target} `'ours'|'theirs'|'local'`
                 See |diffview-conflict-versions| to tell what windows
                 correspond with what version of the file.
 
@@ -1726,9 +1726,8 @@ other buffers). `kind` is `+`, `-` or a space; `lnum` is the old-file line for
 `-` and the new-file line otherwise. `side` is `a` only when every line is a
 deletion; `first`/`last` are the lines on `side`. `rel` is repo-relative.
 
-Caveats: the inline layout keeps no hunks, so each call there diffs the whole
-file (~5 ms for 5000 lines). For commit and file-history entries the line
-numbers are that revision's, while `abs`/`rel` name the working-tree file.
+Caveats: for commit and file-history entries the line numbers are that
+revision's, while `abs`/`rel` name the working-tree file.
 
 ==============================================================================
 

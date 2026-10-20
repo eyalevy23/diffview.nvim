@@ -219,7 +219,7 @@ end
 ---when no branch names the side (a rebase, the base). `%<` sits right after
 ---the pill, so a narrow pane cuts the branch before the side.
 ---@param label string
----@param side "Ours"|"Theirs"|"Base"|"Result"
+---@param side "Ours"|"Theirs"|"Result"
 ---@param detail? string Plain text shown in place of a branch.
 ---@param rev? { hash: string?, ref_names: string? }
 ---@return string

@@ -640,7 +640,7 @@ function M.scroll_view(distance)
   end
 end
 
----@param kind "ours"|"theirs"|"base"|"local"
+---@param kind "ours"|"theirs"|"local"
 local function diff_copy_target(kind)
   local view = lib.get_current_view() --[[@as DiffView|FileHistoryView ]]
   local file = view.cur_entry
@@ -775,7 +775,7 @@ function M.conflict_choose(target)
   end
 end
 
----@param target "ours"|"theirs"|"base"|"local"
+---@param target "ours"|"theirs"|"local"
 function M.diffget(target)
   return function()
     local bufnr = diff_copy_target(target)
@@ -799,7 +799,7 @@ function M.diffget(target)
   end
 end
 
----@param target "ours"|"theirs"|"base"|"local"
+---@param target "ours"|"theirs"|"local"
 function M.diffput(target)
   return function()
     local bufnr = diff_copy_target(target)
@@ -847,6 +847,9 @@ function M.cycle_layout()
   else
     return
   end
+
+  -- Nothing to cycle (a single layout, or no current entry).
+  if not layouts or #layouts < 2 then return end
 
   for _, entry in ipairs(files) do
     local cur_layout = entry.layout

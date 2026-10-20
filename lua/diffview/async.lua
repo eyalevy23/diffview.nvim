@@ -10,7 +10,6 @@ local M = {}
 
 ---@package
 ---@type { [Future]: boolean }
-M._watching = setmetatable({}, { __mode = "k" })
 
 ---@package
 ---@type { [thread]: Future }
@@ -121,9 +120,6 @@ end
 ---@param value boolean
 function Future:set_done(value)
   self.done = value
-  if self:is_watching() then
-    self:dprint("done was set:", self.done)
-  end
 end
 
 ---@return boolean
@@ -141,7 +137,7 @@ end
 ---@param ... any
 function Future:dprint(...)
   if not DiffviewGlobal.logger then return end
-  if DiffviewGlobal.debug_level >= 10 or M._watching[self] then
+  if DiffviewGlobal.debug_level >= 10 then
     local t = { self, "::", ... }
     for i = 1, table.maxn(t) do t[i] = dstring(t[i]) end
     DiffviewGlobal.logger:debug(table.concat(t, " "))
@@ -152,12 +148,6 @@ end
 ---@param ... any
 function Future:dprintf(...)
   self:dprint(fmt(...))
-end
-
----@package
----@return boolean
-function Future:is_watching()
-  return not not M._watching[self]
 end
 
 ---@package

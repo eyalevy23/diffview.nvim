@@ -243,35 +243,4 @@ Semaphore.acquire = async.wrap(function(self, callback)
   return callback(Permit({ parent = self }))
 end)
 
-
----@class CountDownLatch : Waitable
----@operator call : CountDownLatch
----@field initial_count integer
----@field counter integer
----@field sem Semaphore
----@field condvar Condvar
----@field count_down fun(self: CountDownLatch)
-local CountDownLatch = oop.create_class("CountDownLatch", async.Waitable)
-M.CountDownLatch = CountDownLatch
-
-function CountDownLatch:init(count)
-  self.initial_count = count
-  self.counter = count
-  self.sem = Semaphore(1)
-  self.condvar = Condvar()
-end
-
----@override
-function CountDownLatch:await()
-  if self.counter == 0 then return end
-  await(self.condvar)
-end
-
-function CountDownLatch:reset()
-  local permit = await(self.sem:acquire()) --[[@as Permit ]]
-  self.counter = self.initial_count
-  permit:forget()
-  self.condvar:notify_all()
-end
-
 return M
