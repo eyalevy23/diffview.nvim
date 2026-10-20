@@ -111,11 +111,13 @@ end
 ---The merge tool's panes: absolute numbers (relative ones count differently in
 ---each pane, so rows can't be compared across them), the unified view's quiet
 ---"N unchanged lines" fold text, and filler drawn as a faint hatch — it is
----alignment padding, not a deletion. RESULT (`b`) also maps DiffAdd to a
----bg-less group so the conflict washes of scene/conflict_decor.lua show.
----DiffText draws as its line's DiffChange: the sides of a conflict are not
----edits of each other, so 'diffopt' inline:char (the 0.12 default) would
----only scatter word fragments over them and punch holes in the RESULT wash.
+---alignment padding, not a deletion. DiffText draws as its line's DiffChange:
+---the sides of a conflict are not edits of each other, so 'diffopt'
+---inline:char (the 0.12 default) would only scatter word fragments over them.
+---RESULT (`b`) maps every diff group with a bg to a bg-less one instead, so
+---the conflict washes of scene/conflict_decor.lua are its only backgrounds:
+---DiffText draws over extmarks whatever their priority and would punch holes
+---in them. Its change bars in the sign column still mark merged lines.
 ---@param file vcs.File
 ---@param is_result boolean
 local function use_merge_winopts(file, is_result)
@@ -123,10 +125,10 @@ local function use_merge_winopts(file, is_result)
   for _, map in ipairs(file.winopts.winhl or {}) do
     if map:match("^DiffDelete:") then
       map = "DiffDelete:DiffviewDiffFill"
+    elseif is_result and map:match("^Diff[ACT]%w*:") then
+      map = map:match("^(%w+):") .. ":DiffviewResultAdd"
     elseif map:match("^DiffText:") then
       map = "DiffText:DiffviewDiffChange"
-    elseif is_result and map:match("^DiffAdd:") then
-      map = "DiffAdd:DiffviewResultAdd"
     end
     winhl[#winhl + 1] = map
   end
