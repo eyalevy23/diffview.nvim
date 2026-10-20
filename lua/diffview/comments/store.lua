@@ -256,7 +256,7 @@ function M.load(path)
   local content = stat and uv.fs_read(fd, stat.size, 0) or nil
   uv.fs_close(fd)
 
-  if not content or content == "" then return M.empty_doc(), nil end
+  if not content or vim.trim(content) == "" then return M.empty_doc(), nil end
 
   local ok, decoded = pcall(vim.json.decode, content, { luanil = { object = true, array = true } })
   local doc, dropped = nil, 0
@@ -289,7 +289,11 @@ function M.gc(doc, now)
     if (t.status == "resolved" or t.status == "applied") and age_ref and now - age_ref > M.TTL_RESOLVED then
       drop = true
     elseif t.status == "open" and t.outdated_since then
+      -- Measured from the later of going outdated and the last activity: a
+      -- reply to a long-outdated thread must not delete it in the same write.
       local since = M.parse_ts(t.outdated_since)
+      local active = M.parse_ts(t.updated_at)
+      if since and active and active > since then since = active end
       if since and now - since > M.TTL_OUTDATED then drop = true end
     end
 

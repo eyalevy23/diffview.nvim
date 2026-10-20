@@ -67,4 +67,17 @@ describe("diffview.comments.agent", function()
     eq(false, store.awaiting_ai({ status = "resolved", comments = { { author = "eyal" } } }))
     eq(false, store.awaiting_ai("junk"))
   end)
+
+  it("keeps a long-outdated thread that just got a reply", function()
+    local now = os.time()
+    local function iso(t) return os.date("!%Y-%m-%dT%H:%M:%SZ", t) end
+    local old = iso(now - 5 * 24 * 3600)
+    local doc = store.empty_doc()
+    doc.threads = {
+      { id = "t-replied", status = "open", outdated_since = old, created_at = old, updated_at = iso(now), comments = {} },
+      { id = "t-stale", status = "open", outdated_since = old, created_at = old, updated_at = old, comments = {} },
+    }
+    store.gc(doc, now)
+    eq({ "t-replied" }, vim.tbl_map(function(t) return t.id end, doc.threads))
+  end)
 end)

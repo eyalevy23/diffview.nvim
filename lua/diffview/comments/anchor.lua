@@ -122,4 +122,17 @@ function M.resolve(anchor, lines)
   return result(line, false, true)
 end
 
+---Refresh an anchor in place after its line was re-located (drift write-back).
+---@param anchor ReviewAnchor
+---@param new_line integer
+---@param src_lines string[]
+function M.write_back(anchor, new_line, src_lines)
+  local span = (anchor.end_line or anchor.line) - anchor.line
+  anchor.line = new_line
+  anchor.end_line = new_line + span
+  anchor.snippet = src_lines[new_line] or anchor.snippet
+  anchor.ctx_before = src_lines[new_line - 1]
+  anchor.ctx_after = src_lines[new_line + 1]
+end
+
 return M

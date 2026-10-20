@@ -1084,12 +1084,17 @@ function M.init()
       { "claude", "mcp", "get", require("diffview.comments.install").MCP_NAME },
       {},
       function(res)
+        local msg
         if res.code ~= 0 then
+          msg = "[diffview] AI review loop not set up — run :DiffviewReview setup once to enable it"
+        elseif not (res.stdout or ""):find("review%.lua") then
+          -- Registered before the server moved from Python to Lua: the old
+          -- script is gone, so the AI side is broken until setup re-runs.
+          msg = "[diffview] AI review server registration is outdated — run :DiffviewReview setup"
+        end
+        if msg then
           vim.schedule(function()
-            api.nvim_echo({ {
-              "[diffview] AI review loop not set up — run :DiffviewReview setup once to enable it",
-              "Comment",
-            } }, false, {})
+            api.nvim_echo({ { msg, "Comment" } }, false, {})
           end)
         end
       end)

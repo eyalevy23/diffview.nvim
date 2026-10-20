@@ -69,12 +69,12 @@ end
 ---@return ReviewDoc
 function M.read(path)
   local fd = uv.fs_open(path, "r", 438)
-  if not fd then return store.empty_doc() end
+  if not fd then return { version = store.VERSION, review = vim.empty_dict(), threads = {} } end
   local stat = uv.fs_fstat(fd)
   local content = stat and uv.fs_read(fd, stat.size, 0) or nil
   uv.fs_close(fd)
   if not content then fail(3, "cannot read %s", path) end
-  if vim.trim(content) == "" then return store.empty_doc() end
+  if vim.trim(content) == "" then return { version = store.VERSION, review = vim.empty_dict(), threads = {} } end
 
   local ok, doc = pcall(vim.json.decode, content, { luanil = { object = true, array = true } })
   if not ok then
@@ -83,7 +83,9 @@ function M.read(path)
   if type(doc) ~= "table" or type(doc.version) ~= "number" then
     fail(3, "review file has no valid version field — refusing to touch it")
   end
-  doc.review = type(doc.review) == "table" and doc.review or {}
+  -- An empty review must still encode as {} (store.encode prints an empty
+  -- table as a list).
+  doc.review = type(doc.review) == "table" and next(doc.review) and doc.review or vim.empty_dict()
   doc.threads = type(doc.threads) == "table" and doc.threads or {}
   return doc
 end
