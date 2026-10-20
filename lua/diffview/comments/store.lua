@@ -70,14 +70,24 @@ function M.is_ai(author)
   return author == "claude" or author == "ai"
 end
 
----An open thread where the AI spoke last: the human's turn. For open threads
----this is the complement of `awaiting_claude` in
----skills/review/scripts/review_core.py (the AI's queue) — keep them in sync.
+---An open thread where the AI spoke last: the human's turn.
 ---@param thread ReviewThread
 ---@return boolean
 function M.awaiting_human(thread)
   local last = thread.comments[#thread.comments]
   return thread.status == "open" and last ~= nil and M.is_ai(last.author)
+end
+
+---An open thread whose last comment is not the AI's (or has none): the AI's
+---turn — its work queue (comments/agent.lua). Tolerates malformed entries:
+---the agent reads the file without store.load's validation.
+---@param thread any
+---@return boolean
+function M.awaiting_ai(thread)
+  if type(thread) ~= "table" or (thread.status or "open") ~= "open" then return false end
+  local comments = type(thread.comments) == "table" and thread.comments or {}
+  local last = comments[#comments]
+  return not (type(last) == "table" and M.is_ai(last.author))
 end
 
 --#endregion
@@ -132,9 +142,7 @@ end
 --#region JSON
 
 -- Key order for pretty printing: humans and the AI both read this file —
--- stable, readable output matters. Keep the order and format in sync with
--- the encoder in skills/review/scripts/review_write.py so the two
--- writers don't churn each other's formatting.
+-- stable, readable output matters.
 local KEY_ORDER = {
   version = 1, review = 2, threads = 3,
   id = 10, anchor = 11, status = 12, created_at = 13, updated_at = 14,
@@ -327,9 +335,8 @@ end
 
 --#region locking + atomic write
 
----Keep the lockfile protocol in sync with the AI-side writer:
----skills/review/scripts/review_core.py (same lockfile name and stale-steal
----threshold; retry cadence may differ — the CLI blocks, Neovim must not).
+---The AI-side writer (comments/agent.lua) runs this same code in its own
+---Neovim process, so both sides share the lockfile protocol by construction.
 M.LOCK_STALE_S = 10
 M.LOCK_RETRY_MS = 40
 M.LOCK_RETRIES = 25

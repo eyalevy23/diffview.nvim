@@ -103,13 +103,6 @@ function M.check()
     local install = require("diffview.comments.install")
     local uv = vim.uv or vim.loop
 
-    local py = install.python_cmd()
-    if py then
-      health.ok(py .. " found.")
-    else
-      health.warn("python3/python not found on PATH — the review MCP server needs it.")
-    end
-
     if vim.fn.executable("claude") ~= 1 then
       health.warn("`claude` CLI not found on PATH — the AI side is unavailable "
         .. "(install Claude Code, then run :DiffviewReview setup).")
@@ -134,7 +127,10 @@ function M.check()
       if entry:find(script, 1, true) then
         health.ok("MCP registered (user scope) and pointing at the active plugin copy.")
       elseif entry:find("review_mcp%.py") then
-        local stale = entry:match("(/%S+review_mcp%.py)")
+        health.warn("MCP registration still runs the old Python server — "
+          .. "re-run :DiffviewReview setup to switch to the Lua one.")
+      elseif entry:find("review%.lua") then
+        local stale = entry:match("(/%S+review%.lua)")
         if stale and not uv.fs_stat(stale) then
           health.warn("MCP registration points at a MISSING path (plugin moved/removed?): "
             .. stale .. " — re-run :DiffviewReview setup.")
@@ -170,8 +166,8 @@ function M.check()
 
     local npx_copy = vim.fs.normalize("~/.agents/skills/" .. install.SKILL_LINK_NAME)
     if uv.fs_stat(npx_copy) then
-      health.warn("duplicate skill copy from `npx skills` at " .. npx_copy
-        .. " — it can go stale; prefer one source (remove it or skip :DiffviewReview setup's link).")
+      health.warn("standalone skill copy from `npx skills` at " .. npx_copy
+        .. " — its CLI can't run outside the plugin; remove it and use the plugin's copy.")
     end
   end)()
 end

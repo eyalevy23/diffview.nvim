@@ -1,7 +1,7 @@
 ---
 name: diff-nvim-review
 description: Collaborate with the human on a code review through diffview.nvim's shared review file. Use when asked to "review my diff", "address my review comments", "reply to my comments", or anything about the diffview review loop. Reads/writes <git-dir>/diffview-review.json — threads anchored to source lines that both the human (in Neovim) and you read and write.
-allowed-tools: mcp__diff-nvim__*, Bash(python3 *review_write.py *)
+allowed-tools: mcp__diff-nvim__*, Bash(nvim --clean -l *review.lua *)
 ---
 
 # diff.nvim — the shared review loop
@@ -35,6 +35,7 @@ simplifications — skip style nits unless asked.
 ## No review_* tools available?
 
 You are on an agent without the diff.nvim MCP server. Use the bundled CLI
-instead — same protocol, same lock, same file: run `scripts/review_write.py`
-(next to this SKILL.md) with python3 — `--queue` to read your work queue,
-`--help` for the ops-file write flow.
+instead — same protocol, same lock, same file: run `scripts/review.lua`
+(next to this SKILL.md) with Neovim as the Lua runtime —
+`nvim --clean -l scripts/review.lua --queue` reads your work queue, `--help`
+explains the ops-file write flow.

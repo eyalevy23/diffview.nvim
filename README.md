@@ -65,8 +65,8 @@ a thread is always the human's call.
 ### Setting up the AI side
 
 Everything ships **inside this Neovim plugin** — the MCP server, the trigger
-skill, and a CLI fallback (all python3 stdlib, no build step, nothing on
-PATH). Installing the plugin with your plugin manager is the only install.
+skill, and a CLI fallback (plain Lua run by Neovim itself — `nvim -l` — no
+build step, nothing on PATH). Installing the plugin with your plugin manager is the only install.
 Then wire the Claude Code side once, globally for all your projects:
 
 ```vim
@@ -83,17 +83,16 @@ directory). Verify with:
 :checkhealth diffview
 ```
 
-Requirements: the `claude` CLI and `python3` on PATH. Approve the
+Requirements: the `claude` CLI on PATH. Approve the
 `diff-nvim` MCP tools once when Claude first uses them; after that the loop
 runs without approval prompts. To undo: `:DiffviewReview uninstall` — or, if
 you already deleted the plugin, `claude mcp remove --scope user diff-nvim`.
 
-**Other agents** (Cursor, Codex, and friends — no MCP): install the skill +
-CLI copy with the [skills CLI](https://github.com/vercel-labs/skills):
-
-```sh
-npx skills add eyalevy23/diffview.nvim
-```
+**Other agents** (Cursor, Codex, and friends — no MCP): point them at the
+plugin's `skills/review/SKILL.md`; it falls back to the CLI,
+`nvim --clean -l <plugin>/skills/review/scripts/review.lua --help`. The CLI
+runs the plugin's own Lua, so it must be the plugin's copy, not a standalone
+one.
 
 ### Comment keymaps (in the diff)
 

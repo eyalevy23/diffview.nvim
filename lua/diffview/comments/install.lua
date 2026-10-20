@@ -18,7 +18,7 @@ M.SKILL_LINK_NAME = "diff-nvim-review"
 ---through the runtimepath (manager-agnostic).
 ---@return string?
 function M.server_script()
-  return vim.api.nvim_get_runtime_file("skills/review/scripts/review_mcp.py", false)[1]
+  return vim.api.nvim_get_runtime_file("skills/review/scripts/review.lua", false)[1]
 end
 
 ---The bundled skill directory (contains SKILL.md + scripts/).
@@ -33,24 +33,20 @@ function M.skill_link_path()
   return vim.fs.normalize("~/.claude/skills/" .. M.SKILL_LINK_NAME)
 end
 
----@return string? python "python3" | "python" | nil
-function M.python_cmd()
-  for _, py in ipairs({ "python3", "python" }) do
-    if vim.fn.executable(py) == 1 then return py end
-  end
-end
-
 ---The exact `claude mcp add` argv setup runs (exposed for tests/health).
----@param py string
+---The server runs on Neovim itself: `--clean` skips the user's config, `-l`
+---runs the script headless. Prefer `nvim` as found on PATH — progpath can be
+---a versioned install dir (Homebrew's Cellar) that an upgrade deletes.
 ---@param script string
 ---@return string[]
-function M.add_cmd(py, script)
+function M.add_cmd(script)
+  local nvim = vim.fn.exepath("nvim")
   return {
     "claude", "mcp", "add",
     "--scope", "user",
     "--transport", "stdio",
     M.MCP_NAME,
-    "--", py, script,
+    "--", nvim ~= "" and nvim or vim.v.progpath, "--clean", "-l", script, "mcp",
   }
 end
 
@@ -85,11 +81,6 @@ function M.setup()
     utils.err("[diffview] Could not resolve the bundled MCP server on the runtimepath.")
     return
   end
-  local py = M.python_cmd()
-  if not py then
-    utils.err("[diffview] python3 (or python) not found on PATH — required by the review MCP server.")
-    return
-  end
   if vim.fn.executable("claude") ~= 1 then
     utils.err("[diffview] `claude` CLI not found on PATH — install Claude Code first.")
     return
@@ -98,7 +89,7 @@ function M.setup()
   -- Idempotency: drop any previous registration, then add the current path.
   run({ "claude", "mcp", "remove", "--scope", "user", M.MCP_NAME })
 
-  local add = M.add_cmd(py, script)
+  local add = M.add_cmd(script)
   utils.info("[diffview] running: " .. table.concat(add, " "))
   local out, code = run(add)
   if code ~= 0 then
