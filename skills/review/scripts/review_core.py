@@ -45,8 +45,7 @@ KEY_ORDER = {
     "outdated_since": 15, "resolved_reason": 16, "comments": 17,
     "path": 20, "side": 21, "rev": 22, "line": 23, "end_line": 24,
     "snippet": 25, "ctx_before": 26, "ctx_after": 27,
-    "author": 30, "ts": 31, "body": 32, "suggestion": 33, "edited_at": 34,
-    "replace_lines": 40, "text": 41, "original": 42, "declined_at": 43,
+    "author": 30, "ts": 31, "body": 32, "edited_at": 34,
     "summary": 50,
 }
 
@@ -115,51 +114,6 @@ def derive_review_file(cwd=None):
     if not os.path.isabs(git_dir):
         git_dir = os.path.join(cwd or os.getcwd(), git_dir)
     return os.path.join(git_dir, "diffview-review.json")
-
-
-def derive_toplevel(cwd=None):
-    """The work tree root for `cwd`, or None (bare repo, no git): suggestion
-    capture is skipped then, never an error."""
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True, cwd=cwd)
-    except (OSError, subprocess.CalledProcessError):
-        # OSError: no git, or `cwd` is not a directory (a file path).
-        return None
-    return proc.stdout.strip() or None
-
-
-def read_working(root, path):
-    """Lines of the working-tree file, as Neovim reads them. None when it
-    can't be read (missing, not UTF-8)."""
-    try:
-        with open(os.path.join(root, path), encoding="utf-8") as fh:
-            text = fh.read()
-    except (OSError, UnicodeDecodeError):
-        return None
-    return text.split("\n")[:-1] if text.endswith("\n") else text.split("\n")
-
-
-def capture_original(sug, anchor, root, opi):
-    """Record the exact lines a suggestion replaces (suggestion.original), so
-    applying can find them by content in whatever the file has become —
-    never by line number alone. `replace_lines` are line numbers in the
-    working-tree file as it is now, whatever revision the thread is anchored
-    to: that is the file the AI reads and the file a suggestion is applied
-    to. A range past the end of the file is the AI's mistake and is refused
-    now, while it can still fix it."""
-    if not (sug and root and isinstance(anchor, dict)):
-        return
-    lines = read_working(root, anchor.get("path") or "")
-    if lines is None:
-        return
-    first, last = sug["replace_lines"]
-    if last > len(lines):
-        raise ReviewError(
-            1, "op %d: suggestion.replace_lines %d-%d is past the end of %s "
-               "(%d lines)" % (opi, first, last, anchor.get("path"), len(lines)))
-    sug["original"] = "\n".join(lines[first - 1:last])
 
 
 # -- lock + atomic write (mirror of store.lua lock()/write_atomic()) --------
@@ -274,24 +228,6 @@ def as_int(value, field, opi, minimum=1):
     return value
 
 
-def check_suggestion(sug, opi):
-    if sug is None:
-        return None
-    if not isinstance(sug, dict):
-        raise ReviewError(1, "op %d: suggestion must be an object" % opi)
-    rl = sug.get("replace_lines")
-    if (not isinstance(rl, list) or len(rl) != 2
-            or not all(isinstance(n, int) and not isinstance(n, bool) for n in rl)
-            or rl[0] < 1 or rl[1] < rl[0]):
-        raise ReviewError(
-            1, "op %d: suggestion.replace_lines must be [first, last], "
-               "1-indexed, first <= last" % opi)
-    text = sug.get("text")
-    if not isinstance(text, str):
-        raise ReviewError(1, "op %d: suggestion.text must be a string" % opi)
-    return {"replace_lines": [rl[0], rl[1]], "text": text}
-
-
 def check_anchor(anchor, opi):
     if not isinstance(anchor, dict):
         raise ReviewError(1, "op %d: add_thread needs an anchor object" % opi)
@@ -332,7 +268,7 @@ def find_thread(doc, tid, opi):
 
 # -- op application (all-or-nothing: any raise happens before the write) ----
 
-def apply_ops(doc, ops, root=None):
+def apply_ops(doc, ops):
     used = set()
     for t in doc["threads"]:
         if isinstance(t, dict):
@@ -355,10 +291,6 @@ def apply_ops(doc, ops, root=None):
             tid = mint_id("t", used)
             cid = mint_id("c", used)
             comment = {"id": cid, "author": "claude", "ts": ts, "body": body}
-            sug = check_suggestion(op.get("suggestion"), i)
-            if sug:
-                capture_original(sug, anchor, root, i)
-                comment["suggestion"] = sug
             doc["threads"].append({
                 "id": tid,
                 "anchor": anchor,
@@ -375,10 +307,6 @@ def apply_ops(doc, ops, root=None):
             body = as_str(op.get("body"), "body", i)
             cid = mint_id("c", used)
             comment = {"id": cid, "author": "claude", "ts": ts, "body": body}
-            sug = check_suggestion(op.get("suggestion"), i)
-            if sug:
-                capture_original(sug, thread.get("anchor"), root, i)
-                comment["suggestion"] = sug
             thread.setdefault("comments", []).append(comment)
             thread["updated_at"] = ts
             minted.append({"op": i, "comment_id": cid})
@@ -423,9 +351,8 @@ def apply_ops(doc, ops, root=None):
 
 # -- transactions -----------------------------------------------------------
 
-def write_ops(path, ops, root=None):
+def write_ops(path, ops):
     """The full locked write: lock, fresh read, apply, atomic write, unlock.
-    `root` (the work tree) lets suggestions record the lines they replace.
     Returns {"ok": True, "minted": [...]}. Raises ReviewError on any failure
     (nothing is written)."""
     if not isinstance(ops, list) or not ops:
@@ -434,7 +361,7 @@ def write_ops(path, ops, root=None):
     lockfile = acquire_lock(path)
     try:
         doc = load_doc(path)
-        minted = apply_ops(doc, ops, root)
+        minted = apply_ops(doc, ops)
         doc["version"] = VERSION
         doc["review"]["updated_at"] = now_iso()
         write_atomic(path, encode(doc) + "\n")

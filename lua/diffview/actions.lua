@@ -389,11 +389,6 @@ function M.comment_resolve()
   require("diffview.comments").comment_resolve()
 end
 
----Apply the latest AI suggestion of the thread at the cursor to the file.
-function M.comment_apply()
-  require("diffview.comments").comment_apply()
-end
-
 ---Delete the comment thread at the cursor line (undoable).
 function M.comment_delete()
   require("diffview.comments").comment_delete()

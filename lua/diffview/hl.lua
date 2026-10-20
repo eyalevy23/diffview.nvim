@@ -546,8 +546,6 @@ function M.update_comment_hl()
       CommentAuthorAI = "Special",
       CommentInlineCode = "Special",
       CommentOutdated = "Comment",
-      CommentSuggestion = "diffAdded",
-      CommentSuggestionAdd = "DiffAdd",
     }) do
       M.hi_link("Diffview" .. from, to, { default = true })
     end
@@ -555,7 +553,6 @@ function M.update_comment_hl()
   end
 
   local dim = M.get_fg("Comment") or M.blend(fg, bg, 0.45)
-  local green = M.get_fg({ "diffAdded", "@diff.plus", "Character" }) or "#98c379"
 
   local groups = {
     CommentCard = { bg = card },
@@ -569,8 +566,6 @@ function M.update_comment_hl()
     CommentAuthorAI = { fg = M.get_fg("Special") or fg, bg = card, style = "bold" },
     CommentInlineCode = { fg = M.get_fg({ "@markup.raw", "String" }) or fg, bg = M.blend(fg, bg, 0.10) },
     CommentOutdated = { fg = dim, bg = card, style = "italic" },
-    CommentSuggestion = { fg = green, bg = card, style = "bold" },
-    CommentSuggestionAdd = { fg = fg, bg = M.blend(green, bg, 0.14) },
   }
 
   for name, spec in pairs(groups) do

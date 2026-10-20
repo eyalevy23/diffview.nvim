@@ -20,8 +20,8 @@ current directory -> <git-dir>/diffview-review.json. Use --review-file PATH
 to override (e.g. when running outside the repo).
 
 The ops payload is {"ops": [op, ...]} or a bare [op, ...]; each op is one of:
-    {"op": "add_thread", "anchor": {...}, "body": "...", "suggestion": {...}?}
-    {"op": "add_comment", "thread_id": "t-..", "body": "...", "suggestion": {...}?}
+    {"op": "add_thread", "anchor": {...}, "body": "..."}
+    {"op": "add_comment", "thread_id": "t-..", "body": "..."}
     {"op": "edit_comment", "comment_id": "c-..", "body": "..."}
     {"op": "set_status", "thread_id": "t-..", "status": "applied"}
     {"op": "set_summary", "summary": "..."}
@@ -99,10 +99,7 @@ def main():
                 die(1, "ops file %s is not valid JSON: %s" % (ops_file, e))
 
         ops = payload.get("ops") if isinstance(payload, dict) else payload
-        # With an explicit --review-file the cwd may be anywhere: only record
-        # replaced lines when the review file was derived from this repo.
-        root = core.derive_toplevel() if review_path is None else None
-        print(json.dumps(core.write_ops(path, ops, root)))
+        print(json.dumps(core.write_ops(path, ops)))
     except core.ReviewError as e:
         die(e.code, e.message)
 

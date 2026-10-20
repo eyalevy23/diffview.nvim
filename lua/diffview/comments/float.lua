@@ -41,11 +41,6 @@ function M.lines(thread)
   }
   local spans = {}
 
-  -- Fence suggestions with the anchored file's filetype so markdown injection
-  -- highlights them as code.
-  local ft = thread.anchor.path
-      and vim.filetype.match({ filename = thread.anchor.path }) or nil
-
   for ci, c in ipairs(thread.comments) do
     if ci > 1 then lines[#lines + 1] = "---" end
     local first = #lines + 1
@@ -53,15 +48,6 @@ function M.lines(thread)
     lines[#lines + 1] = ""
     for _, l in ipairs(vim.split(c.body or "", "\n", { plain = true })) do
       lines[#lines + 1] = l
-    end
-    if c.suggestion and c.suggestion.text then
-      lines[#lines + 1] = ""
-      lines[#lines + 1] = "Suggested change:"
-      lines[#lines + 1] = "```" .. (ft or "")
-      for _, l in ipairs(vim.split(c.suggestion.text, "\n", { plain = true })) do
-        lines[#lines + 1] = l
-      end
-      lines[#lines + 1] = "```"
     end
     lines[#lines + 1] = ""
     spans[#spans + 1] = { first = first, last = #lines, comment_id = c.id }
@@ -169,7 +155,7 @@ function M.open(thread, opts)
   }
   if vim.fn.has("nvim-0.10") == 1 then
     win_opts.footer = {
-      { " ↵ reply · e edit · d/D delete · u undo · a apply · s resolve · q close ", "DiffviewCommentHint" },
+      { " ↵ reply · e edit · d/D delete · u undo · s resolve · q close ", "DiffviewCommentHint" },
     }
     win_opts.footer_pos = "right"
   end
@@ -220,7 +206,6 @@ function M.open(thread, opts)
   map("u", function()
     if state then comments.comment_undo(state.store_path) end
   end, "Undo the last delete")
-  map("a", function() back_to_source(function() comments.comment_apply() end) end, "Apply suggestion")
   map("s", function() back_to_source(function() comments.comment_resolve() end) end, "Resolve toggle")
 
   -- The float dies with its context: leaving the buffer or its window being

@@ -29,7 +29,7 @@ Highlights of this fork:
 - **AI-collaborative review comments:** GitHub-style threaded comments anchored
   to diff lines, stored in a shared review file that both you (in Neovim) and an
   AI agent (e.g. Claude, via the bundled `diff-nvim-review` skill) can read and
-  write — including one-key application of suggestion blocks.
+  write.
 
 ## Requirements
 
@@ -59,9 +59,8 @@ anchored to diff lines and stored in one JSON file per repo at
 `<git-dir>/diffview-review.json` (inside `.git` — never committed). Neovim
 renders the threads live in the unified diff via a file watcher; an AI agent
 (Claude Code, via the bundled `diff-nvim-review` skill) reads your comments,
-replies in-thread, attaches suggestion blocks you can apply with one key, and
-marks threads `applied` after changing code. Resolving a thread is always the
-human's call.
+replies in-thread, and marks threads `applied` after changing code. Resolving
+a thread is always the human's call.
 
 ### Setting up the AI side
 
@@ -101,7 +100,7 @@ npx skills add eyalevy23/diffview.nvim
 | Key | Action |
 |-----|--------|
 | `<CR>` | Reply to the thread on the line, or start a new one. In visual mode: comment on the selected lines |
-| `E` | Read the thread in a scrollable float (toggles; long cards truncate inline at `comments.max_card_height` rows). Inside the float: `↵`/`r` reply, `e` edit the comment under the cursor, `d` delete it, `D` delete the thread, `u` undo, `a` apply, `s` resolve, `q` close |
+| `E` | Read the thread in a scrollable float (toggles; long cards truncate inline at `comments.max_card_height` rows). Inside the float: `↵`/`r` reply, `e` edit the comment under the cursor, `d` delete it, `D` delete the thread, `u` undo, `s` resolve, `q` close |
 | `]t` / `[t` | Next / previous thread |
 | `]r` / `[r` | Next / previous thread awaiting your reply (the AI spoke last), across files |
 | `<leader>gcq` | Pick among the threads awaiting your reply (`:DiffviewReview awaiting`) |
@@ -110,7 +109,6 @@ npx skills add eyalevy23/diffview.nvim
 | `<leader>gcd` | Delete the thread (`<leader>gcu` or `:DiffviewReview undo` restores it) |
 | `<leader>gcu` | Undo the last delete |
 | `<leader>gcr` | Toggle resolved |
-| `<leader>gca` | Preview the suggestion against your working-tree file, from any view (also commits and staged files): `↵` apply, `e` edit first in a new tab, `x` decline, `q` close |
 | `<leader>gcn` / `<leader>gcp` | Next / previous thread |
 | `<leader>gcD` | Delete ALL threads (asks first) |
 
@@ -456,7 +454,6 @@ require("diffview").setup({
       { "n", "[r",          actions.prev_awaiting,                  { desc = "Prev thread awaiting you" } },
       { "n", "<leader>gcq", actions.comment_pick_awaiting,          { desc = "Comment: threads awaiting you" } },
       { "n", "<leader>gcr", actions.comment_resolve,                { desc = "Comment: toggle resolved on the thread here" } },
-      { "n", "<leader>gca", actions.comment_apply,                  { desc = "Comment: apply the suggestion of the thread here" } },
       { "n", "<C-w><C-f>",  actions.goto_file_split,                { desc = "Open the file in a new split" } },
       { "n", "<C-w>gf",     actions.goto_file_tab,                  { desc = "Open the file in a new tabpage" } },
       { "n", "<leader>e",   actions.focus_files,                    { desc = "Bring focus to the file panel" } },

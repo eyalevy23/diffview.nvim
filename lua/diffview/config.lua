@@ -165,7 +165,6 @@ M.defaults = {
       { "n", "<leader>gcd",  actions.comment_delete,                { desc = "Comment: delete thread (undoable)" } },
       { "n", "<leader>gcu",  actions.comment_undo,                  { desc = "Comment: undo the last delete" } },
       { "n", "<leader>gcr",  actions.comment_resolve,               { desc = "Comment: resolve toggle" } },
-      { "n", "<leader>gca",  actions.comment_apply,                 { desc = "Comment: apply suggestion" } },
       { "n", "<leader>gcn",  actions.next_comment,                  { desc = "Comment: next thread" } },
       { "n", "<leader>gcp",  actions.prev_comment,                  { desc = "Comment: prev thread" } },
       { "n", "<leader>gcD",  actions.comment_clear_all,             { desc = "Comment: delete ALL (confirm)" } },

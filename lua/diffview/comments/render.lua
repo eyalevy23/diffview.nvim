@@ -76,7 +76,7 @@ end
 
 ---Wrap `text` to `width` display cells, breaking on spaces — a word is only
 ---hard-split when it is itself wider than `width`. Leading indent sticks to
----the first line (suggestion text is code). Returns at least one line.
+---the first line. Returns at least one line.
 ---@param text string
 ---@param width integer
 ---@return string[]
@@ -161,177 +161,13 @@ local function inline_chunks(text, body_hl)
   return chunks
 end
 
---#region suggestion syntax highlighting
-
--- Suggestions are code: give them real Treesitter colors over the add-tint,
--- GitHub-style. Every path here degrades to the plain tint — no parser, no
--- filetype, no gui colors, oversized lines — all fall back silently.
-
-local MAX_HL_LINE = 500 -- bytes; don't paint minified monsters
-
--- All three caches are bounded the same way: wholesale reset past the cap.
--- They re-fill lazily; entries are tiny, the caps are generous.
-local CACHE_MAX = 256
-
----filetype → TS lang per anchored path ("" = known-unresolvable).
-local lang_cache, lang_cache_n = {}, 0
-
----Parsed spans per (lang, text): table<lnum0, span[]> | false (uncolorable).
-local span_cache, span_cache_n = {}, 0
-local SPAN_CACHE_MAX = 128
-
----Combined groups (capture fg over the suggestion bg): name | false.
-local sugg_groups, sugg_groups_n = {}, 0
-
-api.nvim_create_autocmd("ColorScheme", {
-  group = api.nvim_create_augroup("diffview_comments_render", { clear = true }),
-  callback = function()
-    -- `:hi clear` wiped the derived groups; re-create them lazily against
-    -- the new colorscheme.
-    sugg_groups, sugg_groups_n = {}, 0
-  end,
-})
-
----@param path? string
----@return string? lang
-local function lang_for(path)
-  if not path then return end
-  local hit = lang_cache[path]
-  if hit ~= nil then return hit ~= "" and hit or nil end
-
-  if lang_cache_n >= CACHE_MAX then lang_cache, lang_cache_n = {}, 0 end
-
-  local ft = vim.filetype.match({ filename = path })
-  local lang = ft and (vim.treesitter.language.get_lang(ft) or ft) or nil
-  lang_cache[path] = lang or ""
-  lang_cache_n = lang_cache_n + 1
-  return lang
-end
-
----Parse a suggestion body and collect capture spans per line. A suggestion
----is a fragment parsed out of context — Treesitter's error recovery makes
----this mostly right; an occasional off token is cosmetic.
----@param text string
----@param lang string
----@return table<integer, { [1]: integer, [2]: integer, [3]: string }[]>? spans_by_line0 [start_byte, end_byte, capture]
-local function suggestion_spans(text, lang)
-  local key = lang .. "\0" .. text
-  local hit = span_cache[key]
-  if hit ~= nil then return hit or nil end
-
-  if span_cache_n >= SPAN_CACHE_MAX then span_cache, span_cache_n = {}, 0 end
-
-  local ok, spans = pcall(function()
-    local parser = vim.treesitter.get_string_parser(text, lang)
-    local root = parser:parse(true)[1]:root()
-    local query = vim.treesitter.query.get(lang, "highlights")
-    if not query then return nil end
-
-    local by_line = {}
-    for id, node in query:iter_captures(root, text, 0, -1) do
-      local capture = query.captures[id]
-      if capture ~= "spell" and capture ~= "nospell" and capture ~= "none" and capture:sub(1, 1) ~= "_" then
-        local sr, sc, er, ec = node:range()
-        for l = sr, math.min(er, sr + 50) do
-          by_line[l] = by_line[l] or {}
-          local line_spans = by_line[l]
-          line_spans[#line_spans + 1] = {
-            l == sr and sc or 0,
-            l == er and ec or math.huge,
-            capture,
-          }
-        end
-      end
-    end
-    return by_line
-  end)
-
-  span_cache[key] = ok and spans or false
-  span_cache_n = span_cache_n + 1
-  return ok and spans or nil
-end
-
----The combined group for a capture over the suggestion background. Created
----on demand; re-created after ColorScheme wipes them.
----@param capture string e.g. "keyword.function"
----@param lang string
----@return string? group
-local function capture_hl(capture, lang)
-  local key = capture .. "@" .. lang
-  local hit = sugg_groups[key]
-  if hit ~= nil then return hit or nil end
-
-  if sugg_groups_n >= CACHE_MAX then sugg_groups, sugg_groups_n = {}, 0 end
-
-  local hl = require("diffview.hl")
-  -- "@keyword.function.lua" is rarely defined directly: walk the same
-  -- fallback chain the TS highlighter uses.
-  local names = { ("@%s.%s"):format(capture, lang) }
-  local cur = "@" .. capture
-  while cur do
-    names[#names + 1] = cur
-    cur = cur:match("^(.*)%.[^.]+$")
-  end
-
-  local fg = hl.get_fg(names)
-  local bg = hl.get_bg("DiffviewCommentSuggestionAdd")
-  if not (fg and bg) then
-    sugg_groups[key] = false
-    sugg_groups_n = sugg_groups_n + 1
-    return
-  end
-
-  local group = "DiffviewCommentSugg_" .. key:gsub("[^%w]", "_")
-  api.nvim_set_hl(0, group, { fg = fg, bg = bg })
-  sugg_groups[key] = group
-  sugg_groups_n = sugg_groups_n + 1
-  return group
-end
-
----Chunkify one display segment of a suggestion line, painting its spans.
----@param seg string Exact byte substring of the source line.
----@param off integer Byte offset of `seg` within its line.
----@param line_spans? { [1]: integer, [2]: integer, [3]: string }[]
----@param lang? string
----@return table[] chunks
-local function suggestion_chunks(seg, off, line_spans, lang)
-  local base = "DiffviewCommentSuggestionAdd"
-  if not (line_spans and lang) or #seg == 0 or #seg > MAX_HL_LINE then
-    return { { seg, base } }
-  end
-
-  -- Paint capture names per byte (capture order — later wins, matching the
-  -- highlighter's override behavior), then compress runs into chunks.
-  local paint = {}
-  for _, sp in ipairs(line_spans) do
-    local s = math.max(sp[1] - off, 0)
-    local e = math.min((sp[2] == math.huge and math.huge or sp[2] - off), #seg)
-    for b = s + 1, e do paint[b] = sp[3] end
-  end
-
-  local chunks = {}
-  local run_start, run_capture = 1, paint[1]
-  for b = 2, #seg + 1 do
-    local cap = paint[b]
-    if b == #seg + 1 or cap ~= run_capture then
-      local group = run_capture and capture_hl(run_capture, lang) or nil
-      chunks[#chunks + 1] = { seg:sub(run_start, b - 1), group or base }
-      run_start, run_capture = b, cap
-    end
-  end
-  return chunks
-end
-
---#endregion
-
 ---Build the virt_lines chunks for one thread card:
 ---
 ---  ╭╴ eyal · 2h ago ─────────────────── ⊘ outdated ╶╮
 ---  │ Body text with `inline code` styled.           │
 ---  │ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
 ---  │ 󰚩 claude · 1h ago                              │
----  │ ▷ Suggested change · replaces lines 12–14      │
----  │ + local x = 1                                  │
+---  │ Reply text.                                    │
 ---  ╰╴t-1a2b3c ─────────────────────────── ↵ reply ╶╯
 ---
 ---The first comment's author + time live in the top border so the card stays
@@ -364,21 +200,15 @@ local function build_box(thread, width, outdated, max_rows, span)
     for _, c in ipairs(thread.comments) do
       local _, n = (c.body or ""):gsub("\n", "")
       raw_total = raw_total + n + 1
-      if c.suggestion and c.suggestion.text then
-        local _, m = c.suggestion.text:gsub("\n", "")
-        raw_total = raw_total + m + 2 -- label row + code lines
-      end
     end
   end
 
   ---Pad a line's chunks to the card width and close it with the right rail.
-  ---`pad_hl` lets block rows (suggestions) extend their tint to the rail.
   ---@param chunks table[]
-  ---@param pad_hl? string
   ---@return table[]
-  local function close_line(chunks, pad_hl)
+  local function close_line(chunks)
     local pad = math.max(0, (width - 1) - chunk_width(chunks))
-    if pad > 0 then chunks[#chunks + 1] = { string.rep(" ", pad), pad_hl or "DiffviewCommentCard" } end
+    if pad > 0 then chunks[#chunks + 1] = { string.rep(" ", pad), "DiffviewCommentCard" } end
     chunks[#chunks + 1] = { "│", border_hl }
     return chunks
   end
@@ -448,47 +278,6 @@ local function build_box(thread, width, outdated, max_rows, span)
       raw_shown = raw_shown + 1
     end
     if truncated then break end
-
-    if comment.suggestion and comment.suggestion.text then
-      if #lines + 2 > budget then truncated = true break end
-
-      local rl = comment.suggestion.replace_lines
-      local label = {
-        { "│ ", border_hl },
-        { "▷ Suggested change", "DiffviewCommentSuggestion" },
-      }
-      if rl then
-        label[#label + 1] = { (" · replaces lines %d–%d"):format(rl[1] or 0, rl[2] or 0), "DiffviewCommentDim" }
-      end
-      if comment.suggestion.declined_at then
-        label[#label + 1] = { " · declined", "DiffviewCommentOutdated" }
-      end
-      lines[#lines + 1] = close_line(label)
-      raw_shown = raw_shown + 1
-
-      -- Code lines hard-slice at the card width (word-wrap helps prose, not
-      -- code) — slices stay exact substrings, so span byte offsets hold.
-      local lang = lang_for(thread.anchor and thread.anchor.path)
-      local spans = lang and suggestion_spans(comment.suggestion.text, lang) or nil
-
-      for li, raw in ipairs(vim.split(comment.suggestion.text, "\n", { plain = true })) do
-        local segs = raw ~= "" and split_word(raw, inner - 2) or { "" }
-        local off = 0
-        for si, seg in ipairs(segs) do
-          if #lines >= budget then truncated = true break end
-          local chunks = {
-            { "│ ", border_hl },
-            { si == 1 and "+ " or "  ", "DiffviewCommentSuggestionAdd" },
-          }
-          vim.list_extend(chunks, suggestion_chunks(seg, off, spans and spans[li - 1], lang))
-          lines[#lines + 1] = close_line(chunks, "DiffviewCommentSuggestionAdd")
-          off = off + #seg
-        end
-        if truncated then break end
-        raw_shown = raw_shown + 1
-      end
-      if truncated then break end
-    end
   end
 
   -- Tail row: replace the last content row so the whole card (borders

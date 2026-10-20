@@ -36,9 +36,7 @@ location; never edit that file directly.
 
 Etiquette: when asked about review comments, start from review_queue — \
 every thread it returns is addressed to you. Reply in-thread with \
-review_reply. For concrete fixes attach a suggestion (exact replacement \
-lines) — the human applies it with one keypress; prefer suggestions over \
-prose for mechanical changes. If you were asked to change code and did it \
+review_reply. If you were asked to change code and did it \
 directly, say so in your reply and mark the thread with review_set_status \
 (applied). Resolving threads is the human's call, never yours, and never \
 re-litigate resolved threads.
@@ -70,21 +68,6 @@ REPO = {
     },
 }
 
-SUGGESTION = {
-    "suggestion": {
-        "type": "object",
-        "description": "Optional concrete replacement the human can apply with one keypress.",
-        "properties": {
-            "replace_lines": {
-                "type": "array", "items": {"type": "integer"},
-                "description": "[first, last] 1-indexed inclusive line range in the file as it is on disk now (the working tree), whatever revision the thread is anchored to",
-            },
-            "text": {"type": "string", "description": "Replacement text (newline separated)"},
-        },
-        "required": ["replace_lines", "text"],
-    },
-}
-
 TOOLS = [
     tool("review_queue",
          "Open review threads awaiting your reply (their last comment is not yours). Start here.",
@@ -103,15 +86,13 @@ TOOLS = [
           "side": {"type": "string", "enum": ["a", "b"], "description": "'b' = new/right side (default), 'a' = old/deleted lines"},
           "rev": {"type": "string", "description": "'WORKING' (default) = working tree; ':0' = index; else a full SHA"},
           "ctx_before": {"type": "string", "description": "Text of the line above (include when it exists)"},
-          "ctx_after": {"type": "string", "description": "Text of the line below (include when it exists)"},
-          **SUGGESTION},
+          "ctx_after": {"type": "string", "description": "Text of the line below (include when it exists)"}},
          ["file", "line", "snippet", "body"]),
     tool("review_reply",
          "Append your reply to an existing thread. The author is always 'claude'.",
          {**REPO,
           "thread_id": {"type": "string"},
-          "body": {"type": "string"},
-          **SUGGESTION},
+          "body": {"type": "string"}},
          ["thread_id", "body"]),
     tool("review_edit_comment",
          "Amend one of YOUR OWN comments. Refused for any comment whose author is not 'claude'.",
@@ -161,10 +142,7 @@ def handle_tool(name, args):
     else:
         raise core.ReviewError(1, "unknown tool: %s" % name)
 
-    if args.get("suggestion") is not None and op["op"] in ("add_thread", "add_comment"):
-        op["suggestion"] = args["suggestion"]
-
-    return core.write_ops(path, [op], core.derive_toplevel(args.get("repo")))
+    return core.write_ops(path, [op])
 
 
 def send(payload):
