@@ -113,6 +113,9 @@ end
 ---"N unchanged lines" fold text, and filler drawn as a faint hatch — it is
 ---alignment padding, not a deletion. RESULT (`b`) also maps DiffAdd to a
 ---bg-less group so the conflict washes of scene/conflict_decor.lua show.
+---DiffText draws as its line's DiffChange: the sides of a conflict are not
+---edits of each other, so 'diffopt' inline:char (the 0.12 default) would
+---only scatter word fragments over them and punch holes in the RESULT wash.
 ---@param file vcs.File
 ---@param is_result boolean
 local function use_merge_winopts(file, is_result)
@@ -120,6 +123,8 @@ local function use_merge_winopts(file, is_result)
   for _, map in ipairs(file.winopts.winhl or {}) do
     if map:match("^DiffDelete:") then
       map = "DiffDelete:DiffviewDiffFill"
+    elseif map:match("^DiffText:") then
+      map = "DiffText:DiffviewDiffChange"
     elseif is_result and map:match("^DiffAdd:") then
       map = "DiffAdd:DiffviewResultAdd"
     end
