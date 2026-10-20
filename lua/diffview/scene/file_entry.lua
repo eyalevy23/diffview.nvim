@@ -6,6 +6,7 @@ local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Dif
 local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModule
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
+local conflict_decor = lazy.require("diffview.scene.conflict_decor") ---@module "diffview.scene.conflict_decor"
 local hl = lazy.require("diffview.hl") ---@module "diffview.hl"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
@@ -77,6 +78,7 @@ function FileEntry:init(opt)
   self.merge_ctx = opt.merge_ctx
   self.active = false
   self.opened = false
+  self:use_merge_winopts()
 end
 
 function FileEntry:destroy()
@@ -104,6 +106,31 @@ function FileEntry:set_active(flag)
   for _, f in ipairs(self.layout:files()) do
     f.active = flag
   end
+end
+
+---The merge tool's panes: absolute numbers (relative ones count differently in
+---each pane, so rows can't be compared across them), the unified view's quiet
+---"N unchanged lines" fold text, and filler drawn as a faint hatch — it is
+---alignment padding, not a deletion. RESULT (`b`) also maps DiffAdd to a
+---bg-less group so the conflict washes of scene/conflict_decor.lua show.
+---@param file vcs.File
+---@param is_result boolean
+local function use_merge_winopts(file, is_result)
+  local winhl = {}
+  for _, map in ipairs(file.winopts.winhl or {}) do
+    if map:match("^DiffDelete:") then
+      map = "DiffDelete:DiffviewDiffFill"
+    elseif is_result and map:match("^DiffAdd:") then
+      map = "DiffAdd:DiffviewResultAdd"
+    end
+    winhl[#winhl + 1] = map
+  end
+  file.winopts = vim.tbl_extend("force", file.winopts, {
+    relativenumber = false,
+    foldtext = "v:lua.require'diffview.scene.layouts.unified_render'.foldtext()",
+    fillchars = "fold: ,diff:╱,eob: ",
+    winhl = winhl,
+  })
 end
 
 ---@param target_layout Layout
@@ -135,7 +162,17 @@ function FileEntry:convert_layout(target_layout)
     c = utils.tbl_access(self.layout, "c.file") or create_file(self.revs.c, "c"),
     d = utils.tbl_access(self.layout, "d.file") or create_file(self.revs.d, "d"),
   })
+  self:use_merge_winopts()
   self:update_merge_context()
+end
+
+---Give a conflicted entry's panes the merge tool's window options.
+function FileEntry:use_merge_winopts()
+  if self.kind ~= "conflicting" or not self.layout then return end
+  for _, sym in ipairs({ "a", "b", "c", "d" }) do
+    local file = utils.tbl_access(self.layout, { sym, "file" })
+    if file then use_merge_winopts(file, sym == "b") end
+  end
 end
 
 ---@param stat? table
@@ -177,19 +214,6 @@ function FileEntry:validate_stage_buffers(stat)
   end
 end
 
----The branch a merge side points at, from `%D` ("HEAD -> main, origin/main"):
----the first ref, without the `HEAD -> ` arrow. A detached HEAD lists a bare
----"HEAD" first, which names nothing; the ref after it does.
----@param ref_names? string
----@return string?
-local function merge_branch(ref_names)
-  if not ref_names or ref_names == "" then return nil end
-  for _, ref in ipairs(vim.split(ref_names, ", ", { plain = true })) do
-    ref = ref:gsub("^HEAD %-> ", "")
-    if ref ~= "HEAD" then return ref end
-  end
-end
-
 ---A merge pane's winbar, styled like the unified one: the side as a colored
 ---pill, then the branch. The short hash, right-aligned and dim, only stands in
 ---when no branch names the side (a rebase, the base). `%<` sits right after
@@ -210,7 +234,7 @@ local function merge_winbar(label, side, detail, rev)
   end
   bar = bar .. "%<"
 
-  local branch = rev and merge_branch(rev.ref_names)
+  local branch = rev and conflict_decor.branch(rev.ref_names)
   local text = branch or detail
   if text then
     bar = bar .. " %#DiffviewWinBarFile#" .. text:gsub("%%", "%%%%")
@@ -234,7 +258,7 @@ function FileEntry:update_merge_context(ctx)
   end
 
   if layout.b then
-    layout.b.file.winbar = merge_winbar("RESULT", "Result", "working tree")
+    layout.b.file.winbar = merge_winbar("RESULT", "Result", "working tree") .. conflict_decor.position_expr
   end
 
   if layout.c then

@@ -13,6 +13,7 @@ local PerfTimer = lazy.access("diffview.perf", "PerfTimer") ---@type PerfTimer|L
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
 local StandardView = lazy.access("diffview.scene.views.standard.standard_view", "StandardView") ---@type StandardView|LazyModule
 local config = lazy.require("diffview.config") ---@module "diffview.config"
+local conflict_decor = lazy.require("diffview.scene.conflict_decor") ---@module "diffview.scene.conflict_decor"
 local debounce = lazy.require("diffview.debounce") ---@module "diffview.debounce"
 local dir_watch = lazy.require("diffview.vcs.dir_watch") ---@module "diffview.vcs.dir_watch"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
@@ -147,6 +148,17 @@ function DiffView:file_open_post(e, new_entry, old_entry)
     if file.bufnr and not self.attached_bufs[file.bufnr] then
       self.attached_bufs[file.bufnr] = true
 
+      local bufnr = file.bufnr
+      conflict_decor.attach(bufnr, function()
+        return self.merge_ctx
+      end, function()
+        -- Not live once another entry is open: drop the flag too, so the next
+        -- file_open_post for this entry attaches afresh.
+        local live = not self.closing:check() and self.cur_entry == new_entry
+        if not live then self.attached_bufs[bufnr] = false end
+        return live
+      end)
+
       local work = debounce.throttle_trailing(
         1000,
         true,
@@ -219,6 +231,12 @@ function DiffView:close()
 
     for _, file in self.files:iter() do
       file:destroy()
+    end
+
+    -- The conflicted buffers are the user's real files; take the merge
+    -- decorations back off before handing them back.
+    for bufnr in pairs(self.attached_bufs) do
+      conflict_decor.detach(bufnr)
     end
 
     self.commit_log_panel:destroy()

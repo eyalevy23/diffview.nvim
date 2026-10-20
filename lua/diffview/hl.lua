@@ -640,6 +640,42 @@ end
 ---Whether the winbar counts are drawn as a pill (a surface color exists).
 M.winbar_pill = false
 
+---One hue per merge side, shared by the winbar pills and the conflict tints
+---in the RESULT pane, so a side reads as the same color everywhere.
+---@return { Ours: string?, Theirs: string?, Base: string?, Result: string? }
+function M.merge_side_colors()
+  return {
+    Ours = M.get_fg({ "Function", "DiffviewFilePanelTitle", "Title" }),
+    Theirs = M.get_fg({ "Constant", "WarningMsg" }),
+    Base = M.get_fg({ "Comment", "DiffviewNonText" }),
+    Result = M.get_fg({ "DiffviewFilePanelInsertions", "Added", "@diff.plus", "GitSignsAdd" }),
+  }
+end
+
+---The merge tool's own groups:
+--- - ConflictOurs/Theirs/Base: each half of a conflict in RESULT, a faint wash
+---   of its side's hue. They paint as extmarks, which only show through a diff
+---   group with no bg — hence ResultAdd, RESULT's bg-less stand-in for DiffAdd.
+--- - ConflictMarker: the `<<<<<<<` / `=======` / `>>>>>>>` lines, dimmed so
+---   the code between them leads; ConflictLabel<Side>: the side named after one.
+--- - DiffFill: filler rows. They are alignment padding, not deletions, so a
+---   faint hatch instead of DiffDelete's alarm.
+function M.update_merge_hl()
+  -- A transparent Normal has no bg to wash into: CursorLine stands in, as for
+  -- the winbar pill.
+  local bg = M.get_bg("Normal", true) or M.get_bg({ "CursorLine", "Visual" })
+  local dim = M.get_fg({ "Comment", "NonText" })
+  for side, color in pairs(M.merge_side_colors()) do
+    if side ~= "Result" then
+      M.hi("DiffviewConflict" .. side, { bg = M.blend(color, bg, 0.08), explicit = true, default = true })
+      M.hi("DiffviewConflictLabel" .. side, { fg = color, style = "italic", explicit = true, default = true })
+    end
+  end
+  M.hi("DiffviewConflictMarker", { fg = dim, explicit = true, default = true })
+  M.hi("DiffviewResultAdd", { fg = "NONE", explicit = true, default = true })
+  M.hi("DiffviewDiffFill", { fg = M.blend(dim, bg, 0.45) or dim, explicit = true, default = true })
+end
+
 ---The winbar's `+N -M` pill: bold counts on a raised surface (Normal's fg
 ---nudged into its bg, like the comment cards), with rounded caps drawn in the
 ---surface color. A transparent Normal has no bg to nudge: the theme's
@@ -655,12 +691,7 @@ function M.update_winbar_hl()
 
   -- The merge panes' side pills (OURS / THEIRS / BASE / RESULT): one hue per
   -- side, so a side is found by color before it is read.
-  for side, color in pairs({
-    Ours = M.get_fg({ "Function", "DiffviewFilePanelTitle", "Title" }),
-    Theirs = M.get_fg({ "Constant", "WarningMsg" }),
-    Base = M.get_fg({ "Comment", "DiffviewNonText" }),
-    Result = add,
-  }) do
+  for side, color in pairs(M.merge_side_colors()) do
     M.hi("DiffviewWinBar" .. side, { fg = color, bg = surface, style = "bold", explicit = true, default = true })
     M.hi("DiffviewWinBar" .. side .. "Cap", { fg = surface, explicit = true, default = true })
   end
@@ -717,6 +748,7 @@ function M.setup()
   M.update_diff_hl()
   M.update_comment_hl()
   M.update_winbar_hl()
+  M.update_merge_hl()
 end
 
 return M
