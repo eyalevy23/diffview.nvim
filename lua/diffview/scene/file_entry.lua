@@ -5,6 +5,8 @@ local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Dif
 local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Diff2|LazyModule
 local File = lazy.access("diffview.vcs.file", "File") ---@type vcs.File|LazyModule
 local RevType = lazy.access("diffview.vcs.rev", "RevType") ---@type RevType|LazyModule
+local config = lazy.require("diffview.config") ---@module "diffview.config"
+local hl = lazy.require("diffview.hl") ---@module "diffview.hl"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
 local api = vim.api
@@ -175,6 +177,50 @@ function FileEntry:validate_stage_buffers(stat)
   end
 end
 
+---The branch a merge side points at, from `%D` ("HEAD -> main, origin/main"):
+---the first ref, without the `HEAD -> ` arrow. A detached HEAD lists a bare
+---"HEAD" first, which names nothing; the ref after it does.
+---@param ref_names? string
+---@return string?
+local function merge_branch(ref_names)
+  if not ref_names or ref_names == "" then return nil end
+  for _, ref in ipairs(vim.split(ref_names, ", ", { plain = true })) do
+    ref = ref:gsub("^HEAD %-> ", "")
+    if ref ~= "HEAD" then return ref end
+  end
+end
+
+---A merge pane's winbar, styled like the unified one: the side as a colored
+---pill, then the branch. The short hash, right-aligned and dim, only stands in
+---when no branch names the side (a rebase, the base). `%<` sits right after
+---the pill, so a narrow pane cuts the branch before the side.
+---@param label string
+---@param side "Ours"|"Theirs"|"Base"|"Result"
+---@param detail? string Plain text shown in place of a branch.
+---@param rev? { hash: string?, ref_names: string? }
+---@return string
+local function merge_winbar(label, side, detail, rev)
+  local group = "%#DiffviewWinBar" .. side .. "#"
+  local bar
+  if hl.winbar_pill and config.get_config().use_icons then
+    local cap = "%#DiffviewWinBar" .. side .. "Cap#"
+    bar = " " .. cap .. "\u{e0b6}" .. group .. " " .. label .. " " .. cap .. "\u{e0b4}"
+  else
+    bar = " " .. group .. label
+  end
+  bar = bar .. "%<"
+
+  local branch = rev and merge_branch(rev.ref_names)
+  local text = branch or detail
+  if text then
+    bar = bar .. " %#DiffviewWinBarFile#" .. text:gsub("%%", "%%%%")
+  end
+  if not branch and rev and rev.hash then
+    bar = bar .. "%= %#DiffviewWinBarDir#" .. rev.hash:sub(1, 7) .. " "
+  end
+  return bar .. "%*"
+end
+
 ---Update winbar info
 ---@param ctx? vcs.MergeContext
 function FileEntry:update_merge_context(ctx)
@@ -184,28 +230,19 @@ function FileEntry:update_merge_context(ctx)
   local layout = self.layout --[[@as Diff4 ]]
 
   if layout.a then
-    layout.a.file.winbar = (" OURS (Current changes) %s %s"):format(
-      (ctx.ours.hash):sub(1, 10),
-      ctx.ours.ref_names and ("(" .. ctx.ours.ref_names .. ")") or ""
-    )
+    layout.a.file.winbar = merge_winbar("OURS", "Ours", nil, ctx.ours)
   end
 
   if layout.b then
-    layout.b.file.winbar = " LOCAL (Working tree)"
+    layout.b.file.winbar = merge_winbar("RESULT", "Result", "working tree")
   end
 
   if layout.c then
-    layout.c.file.winbar = (" THEIRS (Incoming changes) %s %s"):format(
-      (ctx.theirs.hash):sub(1, 10),
-      ctx.theirs.ref_names and ("(" .. ctx.theirs.ref_names .. ")") or ""
-    )
+    layout.c.file.winbar = merge_winbar("THEIRS", "Theirs", nil, ctx.theirs)
   end
 
   if layout.d then
-    layout.d.file.winbar = (" BASE (Common ancestor) %s %s"):format(
-      (ctx.base.hash):sub(1, 10),
-      ctx.base.ref_names and ("(" .. ctx.base.ref_names .. ")") or ""
-    )
+    layout.d.file.winbar = merge_winbar("BASE", "Base", "common ancestor", ctx.base)
   end
 end
 

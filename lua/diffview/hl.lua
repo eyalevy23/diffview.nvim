@@ -653,6 +653,18 @@ function M.update_winbar_hl()
   local add = M.get_fg({ "DiffviewFilePanelInsertions", "Added", "@diff.plus", "GitSignsAdd" })
   local del = M.get_fg({ "DiffviewFilePanelDeletions", "Removed", "@diff.minus", "GitSignsDelete" })
 
+  -- The merge panes' side pills (OURS / THEIRS / BASE / RESULT): one hue per
+  -- side, so a side is found by color before it is read.
+  for side, color in pairs({
+    Ours = M.get_fg({ "Function", "DiffviewFilePanelTitle", "Title" }),
+    Theirs = M.get_fg({ "Constant", "WarningMsg" }),
+    Base = M.get_fg({ "Comment", "DiffviewNonText" }),
+    Result = add,
+  }) do
+    M.hi("DiffviewWinBar" .. side, { fg = color, bg = surface, style = "bold", explicit = true, default = true })
+    M.hi("DiffviewWinBar" .. side .. "Cap", { fg = surface, explicit = true, default = true })
+  end
+
   if not (surface and add and del) then
     M.winbar_pill = false
     for name, spec in pairs({
