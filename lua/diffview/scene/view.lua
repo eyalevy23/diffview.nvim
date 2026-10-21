@@ -85,6 +85,22 @@ function View:close()
   DiffviewGlobal.emitter:off(self._on_view_closed, "view_closed")
 end
 
+---Name what this tab shows ("branch", "uncommitted", "3 commits", ...) for
+---statuslines and tablines: stored in the tab variables `diffview_title` and
+---`diffview_title_hl` (its colour, `DiffviewTitle<Kind>`), and announced with
+---`User DiffviewTitleChanged` so they redraw.
+---@param title string
+---@param kind "Branch"|"Uncommitted"|"Commits"|"Conflicts"|"History"|"Other"
+function View:set_title(title, kind)
+  if not (self.tabpage and api.nvim_tabpage_is_valid(self.tabpage)) then return end
+  if vim.t[self.tabpage].diffview_title == title then return end
+
+  vim.t[self.tabpage].diffview_title = title
+  vim.t[self.tabpage].diffview_title_hl = "DiffviewTitle" .. kind
+  api.nvim_exec_autocmds("User", { pattern = "DiffviewTitleChanged", modeline = false })
+  vim.cmd("redrawtabline")
+end
+
 function View:is_cur_tabpage()
   return self.tabpage == api.nvim_get_current_tabpage()
 end

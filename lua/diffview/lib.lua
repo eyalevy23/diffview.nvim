@@ -16,7 +16,8 @@ local M = {}
 ---@type View[]
 M.views = {}
 
-function M.diffview_open(args)
+---@param view_opts? { title?: string } `title`: a fixed tab title (see View:set_title).
+function M.diffview_open(args, view_opts)
   local default_args = config.get_config().default_args.DiffviewOpen
   local argo = arg_parser.parse(utils.flatten({ default_args, args }))
   local rev_arg = argo.args[1]
@@ -49,6 +50,7 @@ function M.diffview_open(args)
   local v = DiffView({
     adapter = adapter,
     rev_arg = rev_arg,
+    title = view_opts and view_opts.title,
     path_args = adapter.ctx.path_args,
     left = opts.left,
     right = opts.right,

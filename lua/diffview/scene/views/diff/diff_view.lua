@@ -36,6 +36,8 @@ local M = {}
 ---@operator call : DiffView
 ---@field adapter VCSAdapter
 ---@field rev_arg string
+---@field n_commits? integer Commits in a COMMIT..COMMIT range (cached).
+---@field title? string Fixed title ("branch", coloured as one); otherwise derived, see `update_title`.
 ---@field path_args string[]
 ---@field left Rev
 ---@field right Rev
@@ -59,6 +61,7 @@ function DiffView:init(opt)
   self.adapter = opt.adapter
   self.path_args = opt.path_args
   self.rev_arg = opt.rev_arg
+  self.title = opt.title
   self.left = opt.left
   self.right = opt.right
   self.initialized = false
@@ -73,8 +76,7 @@ function DiffView:init(opt)
     panel = FilePanel(
       self.adapter,
       self.files,
-      self.path_args,
-      self.rev_arg or self.adapter:rev_to_pretty_string(self.left, self.right)
+      self.path_args
     ),
   })
 
@@ -83,7 +85,35 @@ function DiffView:init(opt)
   self.valid = true
 end
 
+---Derive the tab's title from what is being compared. Conflicts win over
+---everything (a merge in progress); a commit range is counted once.
+function DiffView:update_title()
+  local title, kind
+
+  if self.merge_ctx then
+    title, kind = "conflicts", "Conflicts"
+  elseif self.title then
+    title, kind = self.title, "Branch"
+  elseif self.left.type == RevType.COMMIT and self.right.type == RevType.COMMIT then
+    if not self.n_commits then
+      local out, code = self.adapter:exec_sync(
+        { "rev-list", "--count", self.left.commit .. ".." .. self.right.commit },
+        self.adapter.ctx.toplevel
+      )
+      self.n_commits = code == 0 and tonumber(out[1]) or 0
+    end
+    title, kind = self.n_commits .. " commits", "Commits"
+  elseif self.right.type == RevType.LOCAL and (self.left.track_head or self.left.type == RevType.STAGE) then
+    title, kind = "uncommitted", "Uncommitted"
+  else
+    title, kind = self.rev_arg or "diff", "Other"
+  end
+
+  self:set_title(title, kind)
+end
+
 function DiffView:post_open()
+  self:update_title()
   vim.cmd("redraw")
 
   self.commit_log_panel = CommitLogPanel(self.adapter, {
@@ -517,6 +547,7 @@ DiffView.update_files = debounce.debounce_trailing(
     perf:lap("updated file list")
 
     self.merge_ctx = next(new_files.conflicting) and self.adapter:get_merge_context() or nil
+    self:update_title()
 
     if self.merge_ctx then
       for _, entry in ipairs(self.files.conflicting) do

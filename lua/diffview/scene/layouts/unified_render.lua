@@ -52,6 +52,7 @@ local TS_BLOCK = 120
 ---@field col_wrap? string statuscolumn for wrapped continuation rows
 ---@field col_blank? string statuscolumn for virtual (virt_lines) rows
 ---@field ts_cache table<integer, false|{ [1]: integer, [2]: integer, [3]: string }[]>
+---@field fold_labels? table<integer, string> fold start row -> scope of the next change
 ---@field diag_src? integer source buffer whose diagnostics are mirrored
 ---@field diag_min? integer lowest mirrored severity
 ---@field diag_dirty? boolean diagnostics changed while not on screen
@@ -488,6 +489,160 @@ local function apply_regex_syntax(bufnr, src_buf)
   if vim.bo[bufnr].syntax ~= syntax then vim.bo[bufnr].syntax = syntax end
 end
 
+--#region fold scope labels
+
+-- "N unchanged lines · afterDeposit()": each gap fold names the function (or
+-- class) its next change sits in, as GitHub labels hunks. Node types differ
+-- per language, so they are matched by name: a function-ish or class-ish word,
+-- minus the look-alikes (calls, types, parameters, bodies).
+local SCOPE_SKIP = { "call", "type", "param", "argument", "signature", "body", "heritage" }
+local LABEL_MAX = 40
+
+---@param t string
+---@return "fn"|"class"|nil
+local function scope_kind(t)
+  for _, w in ipairs(SCOPE_SKIP) do
+    if t:find(w, 1, true) then return nil end
+  end
+  if t:find("function") or t:find("method") or t:find("constructor") or t:find("lambda")
+    or t:find("closure") or t == "func_literal"
+  then
+    return "fn"
+  end
+  if (t:find("class") or t:find("interface") or t:find("struct") or t:find("trait") or t:find("impl"))
+    and (t:find("declaration$") or t:find("definition$") or t:find("_item$") or t:find("specifier$"))
+  then
+    return "class"
+  end
+end
+
+---@param node TSNode
+---@param buf integer
+---@return string
+local function node_text(node, buf)
+  local text = vim.treesitter.get_node_text(node, buf):match("^[^\n]*")
+  text = vim.trim(text)
+  if #text > LABEL_MAX then text = text:sub(1, LABEL_MAX - 1) .. "…" end
+  return text
+end
+
+---The name a scope node goes by: its own `name` field, else what it is
+---assigned to (`const commit = () =>`, `M.open = function`), else for an
+---anonymous callback the call it is passed to with its first string, as test
+---suites read: `it("pays level coins")`.
+---@param node TSNode
+---@param buf integer
+---@return string?
+local function scope_name(node, buf)
+  local name = node:field("name")[1]
+  if name then return node_text(name, buf) end
+
+  local parent = node:parent()
+  for _ = 1, 3 do
+    if not parent then break end
+    local t = parent:type()
+    if t == "arguments" or t == "argument_list" then
+      local call = parent:parent()
+      local fn = call and call:field("function")[1]
+      if not fn then return nil end
+      for child in parent:iter_children() do
+        if child:named() and child:type():find("string") then
+          local str = node_text(child, buf)
+          -- A cut string keeps its closing quote: `it("pays level…")`.
+          if str:find("…$") then str = str .. str:sub(1, 1) end
+          return node_text(fn, buf) .. "(" .. str .. ")"
+        end
+      end
+      return node_text(fn, buf)
+    end
+    local target = parent:field("name")[1] or parent:field("key")[1] or parent:field("left")[1]
+    if target then return node_text(target, buf) end
+    parent = parent:parent()
+  end
+end
+
+---Label of the innermost named function around a source line, else of the
+---innermost class; nil when the line is at the top level.
+---@param buf integer
+---@param lnum integer 1-indexed
+---@return string?
+local function scope_label(buf, lnum)
+  local ok, parser = pcall(vim.treesitter.get_parser, buf, nil, { error = false })
+  if not (ok and parser) then return nil end
+  parser:parse() -- the root tree only, cached when the buffer hasn't changed
+
+  local line = api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
+  local col = (line:find("%S") or 1) - 1
+  local tree = parser:tree_for_range({ lnum - 1, col, lnum - 1, col }, { ignore_injections = true })
+  if not tree then return nil end
+
+  local node = tree:root():named_descendant_for_range(lnum - 1, col, lnum - 1, col)
+  local class
+  while node do
+    local kind = scope_kind(node:type())
+    if kind then
+      local name = scope_name(node, buf)
+      if name then
+        if kind == "fn" then
+          return name:find("%)$") and name or (name .. "()")
+        end
+        class = class or name
+      end
+    end
+    node = node:parent()
+  end
+  return class
+end
+
+---Source buffer and line of a changed rendered row.
+---@param st UnifiedState
+---@param info UnifiedLineInfo
+---@return integer? buf, integer? lnum
+local function change_source(st, info)
+  local buf, lnum
+  if info.kind == "del" then
+    buf, lnum = st.buf_a, info.old_lnum
+  else
+    buf, lnum = st.buf_b, info.new_lnum
+  end
+  if buf and lnum and api.nvim_buf_is_valid(buf) then return buf, lnum end
+end
+
+---Fill `st.fold_labels`: per gap fold, the scope of the first change after
+---it — its first non-blank one, so a blank line added between two methods
+---names the method after it, not the class. Stops at the next fold: that is
+---the next hunk's label. A trailing gap (no change after it) gets none.
+---Normal context only: parser creation is not allowed during redraw, where
+---'foldtext' runs.
+---@param st UnifiedState
+local function compute_fold_labels(st)
+  st.fold_labels = {}
+  for i, range in ipairs(st.fold_ranges) do
+    local stop = st.fold_ranges[i + 1] and st.fold_ranges[i + 1][1] or #st.line_map + 1
+    local first_buf, first_lnum
+    for row = range[2] + 1, stop - 1 do
+      local info = st.line_map[row]
+      if info and info.kind ~= "ctx" then
+        local buf, lnum = change_source(st, info)
+        if buf then
+          first_buf, first_lnum = first_buf or buf, first_lnum or lnum
+          local text = api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
+          if text:find("%S") then
+            first_buf, first_lnum = buf, lnum
+            break
+          end
+        end
+      end
+    end
+    if first_buf then
+      st.fold_labels[range[1]] = scope_label(first_buf, first_lnum)
+    end
+  end
+end
+M._compute_fold_labels = compute_fold_labels -- exposed for tests
+
+--#endregion
+
 ---Render the unified diff of two source buffers into `bufnr`.
 ---@param bufnr integer The scratch buffer to render into.
 ---@param file_a? vcs.File Old side.
@@ -530,6 +685,7 @@ function M.render(bufnr, file_a, file_b, opts)
   -- creation is not allowed during redraw). Rows inside folds fill lazily via
   -- the decoration provider when they scroll into view.
   M._ts_precompute(st, st.visible_ranges)
+  compute_fold_labels(st)
 
   -- Content replacement moved/cleared any foreign extmarks (e.g. comment
   -- threads) — let interested layers repaint against the new line_map.
@@ -752,10 +908,18 @@ function M.statuscol()
 end
 
 ---'foldtext' callback: "N unchanged lines" as a virt-text chunk (nvim 0.10+),
----so it carries its own quiet highlight instead of 'Folded'.
+---so it carries its own quiet highlight instead of 'Folded'; in the unified
+---view followed by the scope of the next change (see compute_fold_labels).
 function M.foldtext()
   local n = vim.v.foldend - vim.v.foldstart + 1
-  return { { ("%d unchanged line%s"):format(n, n == 1 and "" or "s"), "DiffviewUnifiedFold" } }
+  local chunks = { { ("%d unchanged line%s"):format(n, n == 1 and "" or "s"), "DiffviewUnifiedFold" } }
+  local st = M.state[api.nvim_get_current_buf()]
+  local label = st and st.fold_labels and st.fold_labels[vim.v.foldstart]
+  if label then
+    chunks[#chunks + 1] = { " · ", "DiffviewUnifiedFold" }
+    chunks[#chunks + 1] = { label, "DiffviewUnifiedFoldScope" }
+  end
+  return chunks
 end
 
 --#endregion

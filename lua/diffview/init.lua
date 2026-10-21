@@ -160,9 +160,38 @@ function M.init()
   ]])
 end
 
+---What a Diffview tab shows: "branch", "uncommitted", "3 commits",
+---"conflicts", "history" (or the typed rev for any other `:DiffviewOpen`).
+---Made for statuslines and tablines:
+---
+---  * no argument: for the current window's statusline. nil outside a Diffview
+---    tab, and in a floating window (a picker or peek keeps its own label).
+---  * a tabpage handle: that tab's title, for a tabline. nil if it isn't one.
+---
+---The second value is the view's colour as a highlight group, one per kind:
+---`DiffviewTitleBranch`, `…Uncommitted`, `…Commits`, `…Conflicts`,
+---`…History`, `…Other`. Its fg is the colour; link or set them to restyle.
+---
+---Statuslines redraw on `User DiffviewTitleChanged`; tablines redraw anyway.
+---@param tabpage? integer
+---@return string? title
+---@return string? hl_group
+function M.title(tabpage)
+  if not tabpage then
+    if api.nvim_win_get_config(0).relative ~= "" then return nil end
+    tabpage = 0
+  end
+
+  local ok, title = pcall(api.nvim_tabpage_get_var, tabpage, "diffview_title")
+  if not ok then return nil end
+  local _, hl = pcall(api.nvim_tabpage_get_var, tabpage, "diffview_title_hl")
+  return title, hl
+end
+
 ---@param args string[]
-function M.open(args)
-  local view = lib.diffview_open(args)
+---@param opts? { title?: string }
+function M.open(args, opts)
+  local view = lib.diffview_open(args, opts)
   if view then
     view:open()
   end
@@ -174,7 +203,7 @@ end
 ---uncommitted changes, as a plain `:DiffviewOpen`.
 function M.open_branch()
   trunk.merge_base(vim.uv.cwd(), function(sha)
-    M.open(sha and { sha } or {})
+    M.open(sha and { sha } or {}, sha and { title = "branch" } or nil)
   end)
 end
 

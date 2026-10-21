@@ -14,7 +14,6 @@ local M = {}
 ---@field adapter VCSAdapter
 ---@field files FileDict
 ---@field path_args string[]
----@field rev_pretty_name string|nil
 ---@field cur_file FileEntry
 ---@field listing_style "list"|"tree"
 ---@field tree_options TreeOptions
@@ -48,7 +47,7 @@ FilePanel.bufopts = vim.tbl_extend("force", Panel.bufopts, {
 ---@param adapter VCSAdapter
 ---@param files FileEntry[]
 ---@param path_args string[]
-function FilePanel:init(adapter, files, path_args, rev_pretty_name)
+function FilePanel:init(adapter, files, path_args)
   local conf = config.get_config()
   self:super({
     config = conf.file_panel.win_config,
@@ -57,7 +56,6 @@ function FilePanel:init(adapter, files, path_args, rev_pretty_name)
   self.adapter = adapter
   self.files = files
   self.path_args = path_args
-  self.rev_pretty_name = rev_pretty_name
   self.listing_style = conf.file_panel.listing_style
   self.tree_options = conf.file_panel.tree_options
 
@@ -185,11 +183,6 @@ function FilePanel:update_components()
       { name = "title" },
       staged_files,
       { name = "margin" },
-    },
-    {
-      name = "info",
-      { name = "title" },
-      { name = "entries" },
     },
   })
 

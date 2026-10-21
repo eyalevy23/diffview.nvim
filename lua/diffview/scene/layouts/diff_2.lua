@@ -74,7 +74,8 @@ function Diff2.should_null(rev, status, sym)
       return vim.tbl_contains({ "?", "A" }, status)
     end
 
-    return false
+    -- A deleted file has no blob at the new commit; `git show` would fail.
+    return status == "D"
 
   elseif rev.type == RevType.STAGE then
     if sym == "a" then
