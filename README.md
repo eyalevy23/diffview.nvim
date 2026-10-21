@@ -361,6 +361,7 @@ require("diffview").setup({
     --  'diff1_unified'
     --    |'diff1_plain'
     --    |'diff3_horizontal'
+    --    |'diff3_mixed'
     -- For more info, see |diffview-config-view.x.layout|.
     default = {
       -- Config for changed files, and staged files in diff views.

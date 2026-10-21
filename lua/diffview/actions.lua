@@ -15,6 +15,7 @@ local Diff1 = lazy.access("diffview.scene.layouts.diff_1", "Diff1") ---@type Dif
 local Diff1Unified = lazy.access("diffview.scene.layouts.diff_1_unified", "Diff1Unified") ---@type Diff1Unified|LazyModule
 local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
 local Diff3Hor = lazy.access("diffview.scene.layouts.diff_3_hor", "Diff3Hor") ---@type Diff3Hor|LazyModule
+local Diff3Mixed = lazy.access("diffview.scene.layouts.diff_3_mixed", "Diff3Mixed") ---@type Diff3Mixed|LazyModule
 
 local api = vim.api
 local await = async.await
@@ -817,6 +818,7 @@ function M.cycle_layout()
     },
     merge_tool = {
       Diff3Hor.__get(),
+      Diff3Mixed.__get(),
       Diff1.__get(),
     }
   }

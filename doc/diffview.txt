@@ -401,6 +401,7 @@ view.x.layout                                   *diffview-config-view.x.layout*
             "diff1_unified"
                 | "diff1_plain"
                 | "diff3_horizontal"
+                | "diff3_mixed"
                 | -1
 <
         Default: (see defaults)
@@ -520,6 +521,17 @@ view.x.layout                                   *diffview-config-view.x.layout*
                 │    │    │    │
                 │    │    │    │
                 └────┴────┴────┘
+
+            {diff3_mixed}
+                Available for: merge_tool
+
+                ┌───────┬───────┐
+                │   A   │   C   │
+                │ OURS  │THEIRS │
+                ├───────┴───────┤
+                │       B       │
+                │    RESULT     │
+                └───────────────┘
 
 view.x.winbar_info                              *diffview-config-view.x.winbar_info*
         Type: `boolean`, Default: (see defaults)

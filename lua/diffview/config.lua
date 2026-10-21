@@ -10,6 +10,7 @@ local Diff1Unified = lazy.access("diffview.scene.layouts.diff_1_unified", "Diff1
 local Diff2 = lazy.access("diffview.scene.layouts.diff_2", "Diff2") ---@type Diff2|LazyModule
 local Diff3 = lazy.access("diffview.scene.layouts.diff_3", "Diff3") ---@type Diff3|LazyModule
 local Diff3Hor = lazy.access("diffview.scene.layouts.diff_3_hor", "Diff3Hor") ---@type Diff3Hor|LazyModule
+local Diff3Mixed = lazy.access("diffview.scene.layouts.diff_3_mixed", "Diff3Mixed") ---@type Diff3Mixed|LazyModule
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 
 local M = {}
@@ -391,11 +392,13 @@ end
 ---@alias LayoutName "diff1_plain"
 ---       | "diff1_unified"
 ---       | "diff3_horizontal"
+---       | "diff3_mixed"
 
 local layout_map = {
   diff1_plain = Diff1,
   diff1_unified = Diff1Unified,
   diff3_horizontal = Diff3Hor,
+  diff3_mixed = Diff3Mixed,
 }
 
 ---@param layout_name LayoutName
@@ -496,7 +499,7 @@ function M.setup(user_config)
     -- Validate layouts
     local view = M._config.view
     local standard_layouts = { "diff1_unified", -1 }
-    local merge_layuots = { "diff1_plain", "diff3_horizontal", -1 }
+    local merge_layuots = { "diff1_plain", "diff3_horizontal", "diff3_mixed", -1 }
     local valid_layouts = {
       default = standard_layouts,
       merge_tool = merge_layuots,
