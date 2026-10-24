@@ -67,21 +67,27 @@ function View:open()
   DiffviewGlobal.emitter:emit("view_enter", self)
 end
 
+---Close the view's tab page. nvim cannot close the last tab page, so when the
+---view is the last one an empty tab takes its place; its handle travels with
+---the `view_closed` event (and `User DiffviewViewClosed`'s `data.placeholder`)
+---so a config can decide what that empty tab becomes.
 function View:close()
   self.closing:send()
+  local placeholder
 
   if self.tabpage and api.nvim_tabpage_is_valid(self.tabpage) then
     DiffviewGlobal.emitter:emit("view_leave", self)
 
     if #api.nvim_list_tabpages() == 1 then
       vim.cmd("tabnew")
+      placeholder = api.nvim_get_current_tabpage()
     end
 
     local pagenr = api.nvim_tabpage_get_number(self.tabpage)
     vim.cmd("tabclose " .. pagenr)
   end
 
-  DiffviewGlobal.emitter:emit("view_closed", self)
+  DiffviewGlobal.emitter:emit("view_closed", self, placeholder)
   DiffviewGlobal.emitter:off(self._on_view_closed, "view_closed")
 end
 

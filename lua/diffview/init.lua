@@ -132,8 +132,12 @@ function M.init()
   DiffviewGlobal.emitter:on("view_opened", function(_)
     api.nvim_exec_autocmds("User", { pattern = "DiffviewViewOpened", modeline = false })
   end)
-  DiffviewGlobal.emitter:on("view_closed", function(_)
-    api.nvim_exec_autocmds("User", { pattern = "DiffviewViewClosed", modeline = false })
+  DiffviewGlobal.emitter:on("view_closed", function(_, _, placeholder)
+    api.nvim_exec_autocmds("User", {
+      pattern = "DiffviewViewClosed",
+      modeline = false,
+      data = { placeholder = placeholder },
+    })
   end)
   DiffviewGlobal.emitter:on("view_enter", function(_)
     api.nvim_exec_autocmds("User", { pattern = "DiffviewViewEnter", modeline = false })

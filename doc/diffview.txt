@@ -692,12 +692,16 @@ hooks                                           *diffview-config-hooks*
                     {view} (`View`)
                         The `View` instance that was opened.
 
-            {view_closed} (`fun(view: View)`)
+            {view_closed} (`fun(view: View, placeholder?: integer)`)
                 Emitted after closing a view.
 
                 Callback Parameters: ~
                     {view} (`View`)
                         The `View` instance that was closed.
+                    {placeholder} (`integer?`)
+                        When the view was the last tab page, the handle of
+                        the empty tab page that took its place (nvim cannot
+                        close the last tab page). Nil otherwise.
 
             {view_enter} (`fun(view: View)`)
                 Emitted just after entering the tabpage of a view.
@@ -1352,7 +1356,10 @@ For information on how to use User autocommands, see |User|.
                       after initializing the layout in the new tabpage (all
                       windows are ready).
 
-`DiffviewViewClosed`    Fires after a view is closed.
+`DiffviewViewClosed`    Fires after a view is closed. When the view was the
+                      last tab page, an empty tab page took its place and
+                      `data.placeholder` holds its handle (see
+                      |nvim_create_autocmd()| callback `data`).
 
 `DiffviewViewEnter`     Fires just after entering a view.
 
