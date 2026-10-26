@@ -86,8 +86,14 @@ M.defaults = {
     tree_options = {
       flatten_dirs = true,
       folder_statuses = "only_folded",
-      indent_markers = true, -- ├ └ │ guide lines; false = plain space indent
+      indent_markers = true, -- │ └ guide lines; false = plain space indent
     },
+    -- Keep the cursor on the name of the row it is on, like nvim-tree's
+    -- hijack_cursor, instead of in column 0.
+    hijack_cursor = false,
+    -- On leaving the panel, put its cursor back on the file open in the diff
+    -- and center it, like nvim-tree following the current buffer.
+    reveal_on_leave = false,
     win_config = {
       position = "left",
       width = 35,

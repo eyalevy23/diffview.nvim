@@ -47,7 +47,13 @@ local function render_row(comp, left, flex, right, width)
   -- Keep at least a sliver of the flex text even when the row overflows.
   local budget = math.max(width - left_w - right_w, 3)
 
-  for _, c in ipairs(left) do comp:add_text(c[1], c[2]) end
+  -- name_col: the byte column where the name starts, where
+  -- file_panel.hijack_cursor parks the cursor.
+  comp.name_col = 0
+  for _, c in ipairs(left) do
+    comp:add_text(c[1], c[2])
+    comp.name_col = comp.name_col + #c[1]
+  end
 
   local used, clipped = 0, false
 
@@ -187,12 +193,12 @@ end
 ---@param last? boolean Last child of its directory.
 local function render_file_tree_recurse(depth, comp, width, cont, last)
   local conf = config.get_config()
-  -- Indent guides: a row hangs off its parent's chevron column with ├/└,
-  -- ancestors that have more children below continue with │. Top-level rows
-  -- draw none.
+  -- Indent guides: a row hangs off its parent's chevron column with │, the
+  -- last child with └; ancestors that have more children below continue
+  -- with │. Top-level rows draw none.
   local guides = conf.file_panel.tree_options.indent_markers ~= false
   cont = cont or ""
-  local lead = depth == 0 and "" or (cont .. (last and "└ " or "├ "))
+  local lead = depth == 0 and "" or (cont .. (last and "└ " or "│ "))
 
   if comp.name == "file" then
     local indent = guides and { lead, "DiffviewNonText" } or { string.rep(" ", depth + 1) }

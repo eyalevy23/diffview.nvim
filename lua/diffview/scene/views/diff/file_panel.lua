@@ -103,6 +103,51 @@ function FilePanel:setup_buffer()
       callback = function() full_name.hide() end,
     })
   end
+
+  if conf.file_panel.hijack_cursor then
+    api.nvim_create_autocmd("CursorMoved", {
+      group = api.nvim_create_augroup("diffview_hijack_cursor_" .. self.bufid, { clear = true }),
+      buffer = self.bufid,
+      callback = function()
+        local line, col = unpack(api.nvim_win_get_cursor(0))
+        local name_col = self:name_col(line)
+        if name_col ~= col then
+          api.nvim_win_set_cursor(0, { line, name_col })
+        end
+      end,
+    })
+  end
+
+  if conf.file_panel.reveal_on_leave then
+    api.nvim_create_autocmd("WinLeave", {
+      group = api.nvim_create_augroup("diffview_reveal_on_leave_" .. self.bufid, { clear = true }),
+      buffer = self.bufid,
+      callback = function()
+        -- Scheduled: the window being entered is only current afterwards. A
+        -- jump back into the panel (a float closing) is no leave, and neither
+        -- is one into a float opened from it (help, a picker): the panel is
+        -- still what is being worked in.
+        vim.schedule(function()
+          local win = api.nvim_get_current_win()
+          if not self:is_open() or win == self.winid or api.nvim_win_get_config(win).relative ~= "" then
+            return
+          end
+          self:highlight_cur_file()
+          api.nvim_win_call(self.winid, function() vim.cmd("normal! zz") end)
+        end)
+      end,
+    })
+  end
+end
+
+---Column the cursor belongs in on `line` (1-indexed): the start of the row's
+---name with `file_panel.hijack_cursor`, column 0 otherwise.
+---@param line integer
+---@return integer
+function FilePanel:name_col(line)
+  if not config.get_config().file_panel.hijack_cursor then return 0 end
+  local comp = self.components and self.components.comp:get_comp_on_line(line)
+  return comp and comp.name_col or 0
 end
 
 function FilePanel:update_components()
@@ -303,7 +348,7 @@ function FilePanel:highlight_file(file)
     }) do
       for _, comp_struct in ipairs(file_list) do
         if file == comp_struct.comp.context then
-          utils.set_cursor(self.winid, comp_struct.comp.lstart + 1, 0)
+          utils.set_cursor(self.winid, comp_struct.comp.lstart + 1, self:name_col(comp_struct.comp.lstart + 1))
         end
       end
     end
@@ -333,7 +378,7 @@ function FilePanel:highlight_file(file)
             self:redraw()
           end
 
-          utils.set_cursor(self.winid, cur.lstart + 1, 0)
+          utils.set_cursor(self.winid, cur.lstart + 1, self:name_col(cur.lstart + 1))
           return true
         end
 
@@ -357,11 +402,8 @@ function FilePanel:highlight_prev_file()
     return
   end
 
-  pcall(
-    api.nvim_win_set_cursor,
-    self.winid,
-    { self.constrain_cursor(self.winid, -vim.v.count1), 0 }
-  )
+  local line = self.constrain_cursor(self.winid, -vim.v.count1)
+  pcall(api.nvim_win_set_cursor, self.winid, { line, self:name_col(line) })
   utils.update_win(self.winid)
 end
 
@@ -370,10 +412,8 @@ function FilePanel:highlight_next_file()
     return
   end
 
-  pcall(api.nvim_win_set_cursor, self.winid, {
-    self.constrain_cursor(self.winid, vim.v.count1),
-    0,
-  })
+  local line = self.constrain_cursor(self.winid, vim.v.count1)
+  pcall(api.nvim_win_set_cursor, self.winid, { line, self:name_col(line) })
   utils.update_win(self.winid)
 end
 
@@ -382,10 +422,8 @@ function FilePanel:reconstrain_cursor()
     return
   end
 
-  pcall(api.nvim_win_set_cursor, self.winid, {
-    self.constrain_cursor(self.winid, 0),
-    0,
-  })
+  local line = self.constrain_cursor(self.winid, 0)
+  pcall(api.nvim_win_set_cursor, self.winid, { line, self:name_col(line) })
 end
 
 ---@param item DirData|any
