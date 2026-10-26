@@ -127,6 +127,7 @@ function M.cleanup(bufnr)
   local st = M.state[bufnr]
   M.state[bufnr] = nil
   if st and st.diag_src then M.unwatch_diagnostics(bufnr, st.diag_src) end
+  if api.nvim_buf_is_valid(bufnr) then vim.b[bufnr].ephemeral_hl_module = nil end
 end
 
 ---@param file? vcs.File
@@ -677,6 +678,9 @@ function M.render(bufnr, file_a, file_b, opts)
   vim.bo[bufnr].modifiable = false
 
   M.state[bufnr] = st
+  -- The Treesitter colours are ephemeral marks, invisible to the extmark
+  -- query; M.ephemeral_hl_spans serves them to whoever asks.
+  vim.b[bufnr].ephemeral_hl_module = "diffview.scene.layouts.unified_render"
   M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
   M.paint_diagnostics(bufnr)
   apply_regex_syntax(bufnr, buf_b or buf_a)
@@ -1188,6 +1192,21 @@ api.nvim_set_decoration_provider(ns_ts, {
     end
   end,
 })
+
+---The Treesitter spans painted on a rendered row, for a consumer the extmark
+---query cannot serve (the marks are ephemeral): { start_col, end_col,
+---hl_group } each, 0-based, end exclusive, painted at priority 200 =
+---vim.hl.priorities.user. A row not computed yet is filled here, which is a
+---normal context (see ts_fill_block).
+---@param bufnr integer
+---@param row integer 0-indexed
+---@return { [1]: integer, [2]: integer, [3]: string }[]?
+function M.ephemeral_hl_spans(bufnr, row)
+  local st = M.state[bufnr]
+  if not st then return nil end
+  if st.ts_cache[row] == nil then pcall(ts_fill_block, st, row) end
+  return st.ts_cache[row] or nil
+end
 
 --#endregion
 
