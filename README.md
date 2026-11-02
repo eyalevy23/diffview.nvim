@@ -346,6 +346,7 @@ require("diffview").setup({
   show_help_hints = true,   -- Show hints for how to open the help panel
   watch_index = true,       -- Update views and index buffers when the git index changes.
   quit_closes_view = true,  -- `:q` in any window of a view closes the whole view.
+  single_view = true,       -- One diff and one file history at a time; conflicts tabs stay.
   icons = {                 -- Only applies when use_icons is true.
     folder_closed = "",
     folder_open = "",

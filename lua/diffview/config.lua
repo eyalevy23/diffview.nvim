@@ -32,6 +32,10 @@ M.defaults = {
   -- The panel and the diff are one tool: `:q` in any window of a view closes
   -- the whole view instead of leaving the other window orphaned.
   quit_closes_view = true,
+  -- One view of each kind: a new diff closes the open diff, a new file history
+  -- the open history, never each other (a conflicts tab stays until a newer
+  -- one replaces it); opening one that is open already switches to its tab.
+  single_view = true,
   icons = {
     folder_closed = "",
     folder_open = "",

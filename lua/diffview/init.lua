@@ -128,6 +128,24 @@ function M.init()
     end,
   })
 
+  -- `single_view`: a new view replaces the open ones (conflicts tabs stay, see
+  -- lib.close_others). After the new tab exists, so the old ones never leave a
+  -- placeholder tab; scheduled so the open finishes first.
+  DiffviewGlobal.emitter:on("view_opened", function(_, view)
+    if not config.get_config().single_view then return end
+    vim.schedule(function()
+      if vim.tbl_contains(lib.views, view) then lib.close_others(view) end
+    end)
+  end)
+  -- A view that turns into a conflicts tab (a merge started, or it was opened
+  -- mid-merge) replaces the older conflicts tab.
+  DiffviewGlobal.emitter:on("view_merge_started", function(_, view)
+    if not config.get_config().single_view then return end
+    vim.schedule(function()
+      if vim.tbl_contains(lib.views, view) then lib.close_others(view, true) end
+    end)
+  end)
+
   -- Set up user autocommand emitters
   DiffviewGlobal.emitter:on("view_opened", function(_)
     api.nvim_exec_autocmds("User", { pattern = "DiffviewViewOpened", modeline = false })
@@ -192,41 +210,66 @@ function M.title(tabpage)
   return title, hl
 end
 
+---Show an open view again instead of a second copy: entering its tab refreshes
+---a diff; when it is the current tab already, refresh it here.
+---@param view View
+local function reuse(view)
+  if view.tabpage == api.nvim_get_current_tabpage() then
+    M.emit("refresh_files")
+  else
+    api.nvim_set_current_tabpage(view.tabpage)
+  end
+end
+
+---`on_view` gets the view shown — `existing` when it was open already — and
+---is never called when none opens (a bad rev, not a repo).
+---@alias diffview.OnView fun(view: DiffView, existing: boolean)
+
 ---@param args string[]
 ---@param opts? { title?: string }
-function M.open(args, opts)
-  local view = lib.diffview_open(args, opts)
-  if view then
+---@param on_view? diffview.OnView
+function M.open(args, opts, on_view)
+  local view, existing = lib.diffview_open(args, opts)
+  if not view then return end
+
+  if existing then
+    reuse(view)
+  else
     view:open()
   end
+  if on_view then on_view(view, existing == true) end
 end
 
 ---Open the branch diff: the working tree against its merge-base with the trunk
 ---(see diffview.trunk), so the branch's commits and uncommitted edits show
 ---together — a `main...HEAD` range stops at HEAD. Without a trunk: the
 ---uncommitted changes, as a plain `:DiffviewOpen`.
-function M.open_branch()
+---@param on_view? diffview.OnView
+function M.open_branch(on_view)
   trunk.merge_base(vim.uv.cwd(), function(sha)
-    M.open(sha and { sha } or {}, sha and { title = "branch" } or nil)
+    M.open(sha and { sha } or {}, sha and { title = "branch" } or nil, on_view)
   end)
 end
 
 ---Open what a picker's `open` option names: `true` for the branch diff, else
 ---rev args as for `:DiffviewOpen` (a string or a list).
 ---@param open true|string|string[]
-function M.open_for_picker(open)
+---@param on_view? diffview.OnView
+function M.open_for_picker(open, on_view)
   if open == true then
-    M.open_branch()
+    M.open_branch(on_view)
   else
-    M.open(open)
+    M.open(open, nil, on_view)
   end
 end
 
 ---@param range? { [1]: integer, [2]: integer }
 ---@param args string[]
 function M.file_history(range, args)
-  local view = lib.file_history(range, args)
-  if view then
+  local view, existing = lib.file_history(range, args)
+  if existing then
+    reuse(view)
+  elseif view then
     view:open()
   end
 end

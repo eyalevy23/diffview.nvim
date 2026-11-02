@@ -546,8 +546,13 @@ DiffView.update_files = debounce.debounce_trailing(
 
     perf:lap("updated file list")
 
+    local had_merge_ctx = self.merge_ctx ~= nil
     self.merge_ctx = next(new_files.conflicting) and self.adapter:get_merge_context() or nil
     self:update_title()
+
+    if self.merge_ctx and not had_merge_ctx then
+      DiffviewGlobal.emitter:emit("view_merge_started", self)
+    end
 
     if self.merge_ctx then
       for _, entry in ipairs(self.files.conflicting) do

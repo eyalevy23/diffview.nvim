@@ -96,7 +96,7 @@ function M.pick(opts)
       return
     end
     require("diffview.navigate").when_files_ready(
-      function() require("diffview").open_for_picker(opts.open) end,
+      opts.open,
       function() M.pick({ awaiting = opts.awaiting }) end
     )
     return

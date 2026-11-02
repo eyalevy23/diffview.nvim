@@ -16,7 +16,70 @@ local M = {}
 ---@type View[]
 M.views = {}
 
+---@param rev Rev
+local function rev_key(rev)
+  return ("%s:%s:%s:%s"):format(rev.type, rev.commit or "", rev.stage or "", tostring(rev.track_head))
+end
+
+---What makes two diff views the same diff: the repo, the resolved revs (not
+---the typed args, so `HEAD~1` after a new commit is a new diff), the paths and
+---the options (`--untracked-files` etc.), but not `selected_file`: that only
+---says where to land.
+---@param toplevel string
+---@param left Rev
+---@param right Rev
+---@param path_args? string[]
+---@param options? DiffViewOptions
+local function diff_key(toplevel, left, right, path_args, options)
+  local opts = vim.deepcopy(options or {})
+  opts.selected_file = nil
+  return table.concat({
+    toplevel, rev_key(left), rev_key(right), vim.inspect(opts), unpack(path_args or {}),
+  }, "\0")
+end
+
+---An open view whose `key` matches.
+---@param key string
+---@return View?
+local function find_by_key(key)
+  for _, view in ipairs(M.views) do
+    if not view.closing:check() and api.nvim_tabpage_is_valid(view.tabpage or -1) then
+      local vkey = view.open_key
+      if not vkey and view:instanceof(DiffView.__get()) then
+        ---@cast view DiffView
+        vkey = diff_key(view.adapter.ctx.toplevel, view.left, view.right, view.path_args, view.options)
+      end
+      if vkey == key then return view end
+    end
+  end
+end
+
+---A new view replaces the open views of its own kind (`single_view`): a diff
+---closes the other diffs, a file history the other histories; the two kinds
+---never close each other. A view showing a merge in progress (a conflicts tab)
+---survives that; with `conflicts` set, only the other conflicts tabs close
+---instead, so there is one at a time. `keep`'s tab page stays, so no close
+---here ever leaves the empty placeholder tab behind.
+---@param keep View
+---@param conflicts? boolean
+function M.close_others(keep, conflicts)
+  for _, view in ipairs(vim.list_slice(M.views)) do
+    if view ~= keep
+      and view.class == keep.class
+      and not view.closing:check()
+      and (view.merge_ctx ~= nil) == (conflicts == true)
+    then
+      view:close()
+      M.dispose_view(view)
+    end
+  end
+end
+
+---Returns the view and `true` when that diff is open already: the caller
+---switches to it instead of opening a second copy.
 ---@param view_opts? { title?: string } `title`: a fixed tab title (see View:set_title).
+---@return View?
+---@return boolean? existing
 function M.diffview_open(args, view_opts)
   local default_args = config.get_config().default_args.DiffviewOpen
   local argo = arg_parser.parse(utils.flatten({ default_args, args }))
@@ -47,6 +110,12 @@ function M.diffview_open(args, view_opts)
     return
   end
 
+  local key = diff_key(adapter.ctx.toplevel, opts.left, opts.right, adapter.ctx.path_args, opts.options)
+  local existing = config.get_config().single_view and find_by_key(key)
+  if existing then
+    return existing, true
+  end
+
   local v = DiffView({
     adapter = adapter,
     rev_arg = rev_arg,
@@ -67,8 +136,11 @@ function M.diffview_open(args, view_opts)
   return v
 end
 
+---Returns the view and `true` when that history is open already.
 ---@param range? { [1]: integer, [2]: integer }
 ---@param args string[]
+---@return View?
+---@return boolean? existing
 function M.file_history(range, args)
   local default_args = config.get_config().default_args.DiffviewFileHistory
   local argo = arg_parser.parse(utils.flatten({ default_args, args }))
@@ -98,6 +170,12 @@ function M.file_history(range, args)
     return
   end
 
+  local key = adapter.ctx.toplevel .. "\0" .. vim.inspect(log_options)
+  local existing = config.get_config().single_view and find_by_key(key)
+  if existing then
+    return existing, true
+  end
+
   local v = FileHistoryView({
     adapter = adapter,
     log_options = log_options,
@@ -106,6 +184,8 @@ function M.file_history(range, args)
   if not v:is_valid() then
     return
   end
+
+  v.open_key = key
 
   table.insert(M.views, v)
   logger:debug("FileHistoryView instantiation successful!")

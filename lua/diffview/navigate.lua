@@ -97,15 +97,17 @@ end
 ---@param lnum? integer
 function M.open_at(args, abs_path, side, lnum)
   local view = M.find_view(args[1], abs_path)
+  local existing = view ~= nil
+  if not view then
+    view, existing = lib.diffview_open(args)
+  end
+  if not view then return end
 
-  if view then
+  if existing then
     api.nvim_set_current_tabpage(view.tabpage)
     land(view, abs_path, side, lnum)
     return
   end
-
-  view = lib.diffview_open(args)
-  if not view then return end
   view:open()
 
   -- The file list arrives asynchronously, with the first `files_updated`.
@@ -116,21 +118,21 @@ function M.open_at(args, abs_path, side, lnum)
   end))
 end
 
----Run `open` (which opens a view, possibly after async work such as the
----branch diff's merge-base), then `cb` once that view's file list is in: on
----its first `files_updated`, with no polling. `cb` never runs when no view
----opens (a bad rev, not a repo).
----@param open fun()
+---Open what a picker's `open` option names (see diffview.open_for_picker;
+---possibly after async work such as the branch diff's merge-base), then `cb`
+---once that view's file list is in: on its first `files_updated`, with no
+---polling, or right away when that diff was open already and loaded. `cb`
+---never runs when no view opens (a bad rev, not a repo).
+---@param open true|string|string[]
 ---@param cb fun()
 function M.when_files_ready(open, cb)
-  local requested = vim.uv.now()
-  DiffviewGlobal.emitter:once("view_opened", function(_, view)
-    -- A failed open never emits; don't let a view opened much later by
-    -- something else fire this stale request.
-    if vim.uv.now() - requested > 10000 then return end
-    view.emitter:once("files_updated", vim.schedule_wrap(cb))
+  require("diffview").open_for_picker(open, function(view, existing)
+    if existing and view.ready then
+      vim.schedule(cb)
+    else
+      view.emitter:once("files_updated", vim.schedule_wrap(cb))
+    end
   end)
-  open()
 end
 
 return M

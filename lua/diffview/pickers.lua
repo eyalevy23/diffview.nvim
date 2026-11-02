@@ -50,7 +50,7 @@ local function current_view(opts, retry)
     return
   end
 
-  navigate.when_files_ready(function() require("diffview").open_for_picker(opts.open) end, retry)
+  navigate.when_files_ready(opts.open, retry)
 end
 
 ---All file entries of a view, in panel order.
