@@ -110,6 +110,7 @@ function Diff1Unified:winbar_for(path, st)
   if st and st.file_mode then
     bar = bar .. "%#DiffviewWinBarDir#file view "
   end
+  bar = bar .. self:_position_segment(st)
   if st and st.n_add + st.n_del > 0 then
     -- A rounded pill (the statusline's own caps) keeps the counts legible at
     -- the winbar's size; a zero side is left out, as in the file panel.
@@ -117,6 +118,7 @@ function Diff1Unified:winbar_for(path, st)
     if st.n_add > 0 then counts[#counts + 1] = ("%%#DiffviewWinBarPillAdd#+%d"):format(st.n_add) end
     if st.n_del > 0 then counts[#counts + 1] = ("%%#DiffviewWinBarPillDel#-%d"):format(st.n_del) end
     local body = table.concat(counts, "%#DiffviewWinBarPillAdd# ")
+    if hl.winbar_pill then body = body .. self:_stat_bar(st) end
     if hl.winbar_pill and conf.use_icons then
       bar = bar .. "%#DiffviewWinBarPill#\u{e0b6}%#DiffviewWinBarPillAdd# " .. body
         .. "%#DiffviewWinBarPillAdd# %#DiffviewWinBarPill#\u{e0b4} "
@@ -125,6 +127,91 @@ function Diff1Unified:winbar_for(path, st)
     end
   end
   return bar .. "%*"
+end
+
+---` ▰▰▱▱▱` for the counts pill: this file's change against the largest file
+---in the view's list (generated files left out, so a lockfile doesn't dwarf
+---the rest), green then red by the split, the rest dim.
+---@private
+---@param st UnifiedState
+---@return string
+function Diff1Unified:_stat_bar(st)
+  local sb = config.get_config().stat_bar
+  local n = st.n_add + st.n_del
+  if not sb or n == 0 then return "" end
+
+  local max = n
+  local view = lib.get_current_view()
+  local panel = view and view.panel
+  if panel and panel.files then
+    local gen = require("diffview.generated")
+    for _, list in ipairs({ panel.files.conflicting or {}, panel.files.working or {}, panel.files.staged or {} }) do
+      for _, f in ipairs(list) do
+        local s = f.stats
+        if s and s.additions and not gen.collapsed(f.path) then
+          max = math.max(max, s.additions + s.deletions)
+        end
+      end
+    end
+  end
+
+  local w = sb.width or 5
+  local filled, empty = sb.filled or "▰", sb.empty or "▱"
+  local fill = math.max(1, math.min(w, math.ceil(w * n / max)))
+  local adds = math.floor(fill * st.n_add / n + 0.5)
+  -- Each side that changed gets at least one cell.
+  if st.n_add > 0 and adds == 0 then adds = 1 end
+  if st.n_del > 0 and adds == fill and fill > 1 then adds = fill - 1 end
+  return "%#DiffviewWinBarPillAdd# " .. filled:rep(adds)
+    .. "%#DiffviewWinBarPillDel#" .. filled:rep(fill - adds)
+    .. "%#DiffviewWinBarPillHunkTotal#" .. empty:rep(w - fill)
+end
+
+---Where the cursor is among the file's hunks: a `3/10` pill, right-aligned
+---before the `+N -M` one. Between hunks the count is the last one
+---passed, dimmed; before the first it reads `–/10`.
+---@private
+---@param st? UnifiedState
+---@return string
+function Diff1Unified:_position_segment(st)
+  if not (st and #st.hunk_rows > 0) then
+    self._pos_key = nil
+    return ""
+  end
+  local row = 1
+  local main = self.main
+  if main and main:is_valid() and main.file and api.nvim_win_get_buf(main.id) == main.file.bufnr then
+    row = api.nvim_win_get_cursor(main.id)[1]
+  end
+  local idx, inside = unified.hunk_at(st, row)
+  self._pos_key = ("%s:%d:%s"):format(tostring(st), idx, tostring(inside))
+
+  local total = #st.hunk_rows
+  local num = idx > 0 and tostring(idx) or "–"
+  if hl.winbar_pill and config.get_config().use_icons then
+    -- Its own pill, left of the `+N -M` one, on the same surface.
+    return ("%%#DiffviewWinBarPill#\u{e0b6}%%#%s# %s%%#DiffviewWinBarPillHunkTotal#/%d %%#DiffviewWinBarPill#\u{e0b4} ")
+      :format(inside and "DiffviewWinBarPillHunk" or "DiffviewWinBarPillHunkTotal", num, total)
+  end
+  return ("%%#%s#%s%%#DiffviewWinBarHunkTotal#/%d "):format(
+    inside and "DiffviewWinBarHunk" or "DiffviewWinBarHunkTotal", num, total)
+end
+
+---Update the winbar's position segment after a cursor move (only when the
+---hunk under the cursor changed).
+function Diff1Unified:update_position()
+  local file = self.main.file
+  if not (self.main:is_valid() and file and file:is_valid()) then return end
+  if api.nvim_win_get_buf(self.main.id) ~= file.bufnr then return end
+  local st = unified.state[file.bufnr]
+  if not st then return end
+  local row = api.nvim_win_get_cursor(self.main.id)[1]
+  local idx, inside = unified.hunk_at(st, row)
+  if self._pos_key == ("%s:%d:%s"):format(tostring(st), idx, tostring(inside)) then return end
+  file.winbar = self:winbar_for(file.path, st)
+  if self.main:show_winbar_info() then
+    vim.wo[self.main.id].winbar = file.winbar
+  end
 end
 
 ---The synthetic file wrapping the unified scratch buffer. Created lazily on
@@ -197,6 +284,17 @@ function Diff1Unified:_ensure_unified_buf()
       end,
     })
 
+    -- The winbar's `3/10` follows the cursor. Resolved through the
+    -- current view: the layout instance showing this buffer can change.
+    api.nvim_create_autocmd("CursorMoved", {
+      buffer = file.bufnr,
+      callback = function()
+        local view = lib.get_current_view()
+        local layout = view and view.cur_layout
+        if layout and layout.update_position then pcall(layout.update_position, layout) end
+      end,
+    })
+
     file:post_buf_created()
   end
 
@@ -211,6 +309,7 @@ function Diff1Unified:_render()
   local file = self:_ensure_unified_buf()
   local st, changed = unified.render(file.bufnr, self.a.file, self.b.file, {
     file_mode = self._file_mode_buf == file.bufnr,
+    collapsed = require("diffview.generated").collapsed(file.path),
   })
   self:_follow(self.b.file and self.b.file:is_valid() and self.b.file.bufnr or nil)
   self:_watch_diagnostics(file.bufnr)

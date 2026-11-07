@@ -36,6 +36,29 @@ M.defaults = {
   -- the open history, never each other (a conflicts tab stays until a newer
   -- one replaces it); opening one that is open already switches to its tab.
   single_view = true,
+  -- Diff with whitespace ignored (git's -w): re-indentation and formatting
+  -- don't show as changes, in the diff or in the file panel's counts.
+  -- `gw` in a diff shows them again (and back).
+  ignore_whitespace = true,
+  -- Lockfiles, minified bundles, snapshots: their diff opens folded to one
+  -- row (zo shows it), the panel dims them, and hunk navigation passes over
+  -- them. `gG` in a diff turns the collapsing off (and back). `patterns` are
+  -- globs, matched against the basename, or the repo-relative path when they
+  -- contain a `/`.
+  generated = {
+    collapse = true,
+    patterns = {
+      "*.lock", "*.lockb", "*-lock.json", "*-lock.yaml", "*.lock.json",
+      "go.sum", "go.work.sum",
+      "*.min.js", "*.min.css", "*.map",
+      "*.snap", "**/__snapshots__/**",
+      "*.pb.go", "*_pb2.py", "*_pb2.pyi", "*.g.dart", "*.freezed.dart",
+    },
+  },
+  -- A small bar in the winbar's `+N -M` pill: this file's change against the
+  -- largest file in the diff (generated files left out), green/red by the
+  -- split. false hides it.
+  stat_bar = { width = 5, filled = "▰", empty = "▱" },
   icons = {
     folder_closed = "",
     folder_open = "",
@@ -194,6 +217,9 @@ M.defaults = {
       -- Mappings in 2-way diff layouts (the unified layout)
       { "n", "g?", actions.help({ "view", "diff2" }), { desc = "Open the help panel" } },
       { "n", "gm", actions.toggle_file_view,          { desc = "Toggle file view: whole file, change markers in the gutter" } },
+      { "n", "gb", actions.toggle_add_bands,          { desc = "Background on added lines / gutter bar only" } },
+      { "n", "gw", actions.toggle_whitespace,         { desc = "Show / ignore whitespace-only changes" } },
+      { "n", "gG", actions.toggle_generated,          { desc = "Collapse generated files (lockfiles, …) / show them" } },
     },
     diff3 = {
       -- Mappings in 3-way diff layouts

@@ -187,6 +187,8 @@ function M.diff_tokens(tok_a, tok_b)
   return {
     segs_a = A.segs,
     segs_b = B.segs,
+    text_a = table.concat(tok_a.tokens),
+    text_b = table.concat(tok_b.tokens),
     changed_chars_a = A.changed,
     changed_chars_b = B.changed,
     content_chars_a = content_chars(tok_a),
@@ -198,10 +200,15 @@ end
 ---Coalesce one side's segments into display ranges. Changed runs separated
 ---only by a narrow, wordless matched gap ("(", " = ", ", ") merge into one
 ---range — fragmented confetti reads as noise.
+---
+---Whitespace is never painted: a range is trimmed to its first and last
+---non-blank byte, and one that is only whitespace (an indent shift) is
+---dropped — a solid block of color over indentation says nothing.
 ---@param segs { changed: boolean, s: integer, e: integer, has_word: boolean }[]
+---@param text? string The line, to trim ranges against.
 ---@return { [1]: integer, [2]: integer }[] ranges
 ---@return integer emphasized total bytes covered
-local function coalesce(segs)
+local function coalesce(segs, text)
   local ranges, emphasized = {}, 0
   local i = 1
   while i <= #segs do
@@ -220,8 +227,19 @@ local function coalesce(segs)
         nonws = nonws + segs[j].nonws + segs[j + 1].nonws
         j = j + 2
       end
-      ranges[#ranges + 1] = { s, e }
-      emphasized = emphasized + nonws
+      if text then
+        -- 0-indexed [s, e) over the 1-indexed string.
+        while s < e and text:byte(s + 1) and (text:byte(s + 1) == 0x20 or text:byte(s + 1) == 0x09) do
+          s = s + 1
+        end
+        while e > s and (text:byte(e) == 0x20 or text:byte(e) == 0x09) do
+          e = e - 1
+        end
+      end
+      if e > s then
+        ranges[#ranges + 1] = { s, e }
+        emphasized = emphasized + nonws
+      end
       i = j
     else
       i = i + 1
@@ -240,8 +258,8 @@ end
 function M.ratio_filter(result)
   if not result then return nil, nil end
 
-  local ranges_a, emph_a = coalesce(result.segs_a)
-  local ranges_b, emph_b = coalesce(result.segs_b)
+  local ranges_a, emph_a = coalesce(result.segs_a, result.text_a)
+  local ranges_b, emph_b = coalesce(result.segs_b, result.text_b)
 
   if #ranges_a > M.MAX_RANGES or #ranges_b > M.MAX_RANGES then return nil, nil end
 

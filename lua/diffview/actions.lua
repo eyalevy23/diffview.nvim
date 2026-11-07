@@ -7,6 +7,7 @@ local DiffView = lazy.access("diffview.scene.views.diff.diff_view", "DiffView") 
 local FileHistoryView = lazy.access("diffview.scene.views.file_history.file_history_view", "FileHistoryView") ---@type FileHistoryView|LazyModule
 local HelpPanel = lazy.access("diffview.ui.panels.help_panel", "HelpPanel") ---@type HelpPanel|LazyModule
 local StandardView = lazy.access("diffview.scene.views.standard.standard_view", "StandardView") ---@type StandardView|LazyModule
+local config = lazy.require("diffview.config") ---@module "diffview.config"
 local lib = lazy.require("diffview.lib") ---@module "diffview.lib"
 local utils = lazy.require("diffview.utils") ---@module "diffview.utils"
 local vcs_utils = lazy.require("diffview.vcs.utils") ---@module "diffview.vcs.utils"
@@ -326,9 +327,10 @@ local function unified_hunk_nav(dir)
       wrap = false,
       skip = function(entry)
         -- numstat already says there is nothing to see (mode change, pure
-        -- rename): don't open it.
+        -- rename, whitespace only under -w), or a collapsed generated file.
         local s = entry.stats
-        return s ~= nil and s.additions == 0 and s.deletions == 0
+        return (s ~= nil and s.additions == 0 and s.deletions == 0)
+          or require("diffview.generated").collapsed(entry.path)
       end,
       row = function(b, d)
         local st = unified.state[b]
@@ -362,6 +364,51 @@ function M.toggle_file_view()
   if layout and layout.toggle_file_mode then
     layout:toggle_file_mode()
   end
+end
+
+---Unified diff: full-width background on added lines, or (the default) only
+---a gutter bar, so added code reads like plain code.
+function M.toggle_add_bands()
+  local unified = require("diffview.scene.layouts.unified_render")
+  unified.add_bands = not unified.add_bands
+  local view = lib.get_current_view()
+  local layout = view and view.cur_layout
+  if layout and layout._refresh then layout:_refresh() end
+end
+
+---Re-render the open diff after a display setting changed, keeping the
+---cursor on its source line. With `restat`, the file list is re-read too
+---(git's own counts depend on the setting).
+---@param restat? boolean
+local function rerender_current(restat)
+  local view = lib.get_current_view()
+  if not view then return end
+  local layout = view.cur_layout
+  if layout and layout._refresh then layout:_refresh() end
+  if restat and view.update_files then view:update_files() end
+end
+
+---Show whitespace-only changes, or ignore them again (git's -w): the diff
+---and the file panel's counts.
+function M.toggle_whitespace()
+  local conf = config.get_config()
+  conf.ignore_whitespace = not conf.ignore_whitespace
+  rerender_current(true)
+  nav_echo(conf.ignore_whitespace and "Ignoring whitespace changes." or "Showing whitespace changes.")
+end
+
+---Collapse generated files (lockfiles, minified bundles, snapshots) to one
+---folded row and skip them in hunk navigation, or show them like any file.
+function M.toggle_generated()
+  local conf = config.get_config()
+  conf.generated.collapse = not conf.generated.collapse
+  rerender_current(false)
+  local view = lib.get_current_view()
+  if view and view.panel and view.panel.render then
+    view.panel:render()
+    view.panel:redraw()
+  end
+  nav_echo(conf.generated.collapse and "Collapsing generated files." or "Showing generated files.")
 end
 
 ---Reply to the comment thread on the cursor line, or start a new one.

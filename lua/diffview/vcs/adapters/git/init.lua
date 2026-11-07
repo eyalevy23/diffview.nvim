@@ -1765,6 +1765,38 @@ GitAdapter.tracked_files = async.wrap(function(self, left, right, args, kind, op
   local numstat_out = numstat_job.stdout
   local namestat_out = namestat_job.stdout
 
+  -- config.ignore_whitespace: the counts as `git diff -w` sees them, so the
+  -- panel agrees with the diff. A separate run: -w drops whitespace-only
+  -- files from --numstat altogether, which would unpair it from the
+  -- --name-status list above. Those files count 0/0.
+  ---@type table<string, { [1]: integer, [2]: integer }>?
+  local ws_counts
+  if config.get_config().ignore_whitespace then
+    local ws_job = Job({
+      command = self:bin(),
+      args = utils.vec_join(
+        self:args(),
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--ignore-submodules",
+        "--numstat",
+        "-w",
+        args
+      ),
+      cwd = self.ctx.toplevel,
+      log_opt = log_opt,
+    })
+    local ws_ok = await(ws_job)
+    if ws_ok then
+      ws_counts = {}
+      for _, line in ipairs(ws_job.stdout) do
+        local a, d, path = line:match("^(%d+)\t(%d+)\t(.*)$")
+        if a then ws_counts[path] = { tonumber(a), tonumber(d) } end
+      end
+    end
+  end
+
   local data = {}
   local conflict_map = {}
 
@@ -1785,6 +1817,10 @@ GitAdapter.tracked_files = async.wrap(function(self, left, right, args, kind, op
 
     if not stats.additions or not stats.deletions then
       stats = nil
+    elseif ws_counts and not oldname then
+      -- (A rename's numstat path is `old => new`: keep git's plain counts.)
+      local c = ws_counts[name] or { 0, 0 }
+      stats.additions, stats.deletions = c[1], c[2]
     end
 
     if not (status == "U" and kind == "staged") then

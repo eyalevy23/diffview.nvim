@@ -787,7 +787,7 @@ local function render(step)
 
   -- Size to the content.
   local conf = config.get_config().peek
-  local gutter = sub.w_old + sub.w_new + 4
+  local gutter = sub.w_old + sub.w_new + 5
   local content = 0
   for _, l in ipairs(lines) do
     content = math.max(content, vim.fn.strdisplaywidth(l))

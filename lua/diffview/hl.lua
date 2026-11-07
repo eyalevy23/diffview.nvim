@@ -398,6 +398,8 @@ M.hl_links = {
   FilePanelFileName = "Normal",
   FilePanelSelected = "Type",
   FilePanelPath = "Comment",
+  -- A file with nothing to review: generated, or whitespace-only changes.
+  FilePanelGenerated = "Comment",
   FilePanelInsertions = "diffAdded",
   FilePanelDeletions = "diffRemoved",
   FilePanelConflicts = "DiagnosticSignWarn",
@@ -436,6 +438,12 @@ M.hl_links = {
   UnifiedFold = "Comment",
   UnifiedFoldScope = "Function",
   UnifiedFoldIcon = "DiffviewNonText",
+  UnifiedSignMoved = "DiffviewNonText",
+  UnifiedMovedHint = "DiffviewDim1",
+  UnifiedMovedText = "DiffviewDim1",
+  -- The position segment of the unified winbar: `3/10`.
+  WinBarHunk = "DiffviewFilePanelFileName",
+  WinBarHunkTotal = "DiffviewNonText",
   -- One colour per view, for statuslines and tablines (diffview.title()).
   TitleBranch = "Function",
   TitleUncommitted = "DiagnosticWarn",
@@ -660,6 +668,10 @@ function M.update_winbar_hl()
     WinBarPill = { fg = surface },
     WinBarPillAdd = { fg = add, bg = surface, style = "bold" },
     WinBarPillDel = { fg = del, bg = surface, style = "bold" },
+    -- The `3/10` hunk-position pill, same surface; the current hunk bright,
+    -- the total (and a between-hunks count) dimmed.
+    WinBarPillHunk = { fg = M.get_fg("DiffviewWinBarHunk") or fg, bg = surface, style = "bold" },
+    WinBarPillHunkTotal = { fg = M.get_fg("DiffviewWinBarHunkTotal"), bg = surface },
   }) do
     spec.explicit = true
     spec.default = true
@@ -677,6 +689,36 @@ function M.update_diff_hl()
 
   word_hl("DiffviewDiffAddText", "DiffviewDiffAdd", { "diffAdded", "@diff.plus", "Added" }, "DiffviewDiffText")
   word_hl("DiffviewDiffDeleteText", "DiffviewDiffDelete", { "diffRemoved", "@diff.minus", "Removed" }, "DiffviewDiffText")
+
+  M.update_review_hl()
+end
+
+---Groups for reading big diffs, derived from the line bands so they follow
+---the theme (and a user definition of any of them wins):
+--- - DiffMovedAdd: the new copy of code that only moved (or only changed
+---   indentation), when added lines carry bands — at half strength.
+--- - UnifiedLink: the replacement bracket in the gutter, a quiet change hue.
+function M.update_review_hl()
+  -- A transparent Normal has no bg to fade into: the theme's surfaces stand
+  -- in (the same fallback the winbar pill uses).
+  local bg = M.get_bg("Normal", true) or M.get_bg({ "CursorLine", "Visual" })
+  local change = M.get_fg({ "GitSignsChange", "diffChanged", "DiagnosticWarn" })
+
+  -- Only with `gb` (added-line bands on); a moved line's removed copy never
+  -- gets a band.
+  local faded = M.blend(M.get_bg("DiffviewDiffAdd"), bg, 0.45)
+  if faded then
+    M.hi("DiffviewDiffMovedAdd", { bg = faded, explicit = true, default = true })
+  else
+    M.hi_link("DiffviewDiffMovedAdd", "DiffviewDiffAdd", { default = true })
+  end
+
+  local link = M.blend(change, bg, 0.6)
+  if link then
+    M.hi("DiffviewUnifiedLink", { fg = link, explicit = true, default = true })
+  else
+    M.hi_link("DiffviewUnifiedLink", "DiffviewNonText", { default = true })
+  end
 end
 
 function M.setup()

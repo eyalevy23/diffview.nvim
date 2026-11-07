@@ -27,16 +27,38 @@ local HUNK_PAIR_CAP = 40000
 -- cache miss, so scrolling costs one parse per block, not per line.
 local TS_BLOCK = 120
 
+---Paint added lines with a full-width band. Off (the default) added code
+---reads as plain code: the gutter bar marks it, and only the changed words of
+---a replacement carry color. Removed lines always keep their band — they are
+---not in the file any more, and need to look it. Toggled by
+---actions.toggle_add_bands.
+M.add_bands = false
+
+-- Moved-code detection: a deleted run and an added run of at least this many
+-- lines, equal once indentation is stripped, with at least MOVED_MIN_SIG lines
+-- that carry real content (not `end`, `}` or blanks).
+M.MOVED_MIN_LINES = 3
+local MOVED_MIN_SIG = 2
+-- Candidate destinations tried per deleted line: bounds the scan on files
+-- with many identical lines.
+local MOVED_MAX_CANDIDATES = 64
+
 ---@class UnifiedLineInfo
 ---@field kind "ctx"|"add"|"del"
 ---@field old_lnum? integer Line number in the old (a) source
 ---@field new_lnum? integer Line number in the new (b) source
+---@field link? string Gutter bracket tying a replacement's removed rows to its added rows
+---@field moved? "moved"|"reindent" Unchanged content that moved, or only changed indentation
+---@field moved_hint? string End-of-line note on the first row of a moved block
 
 ---@class UnifiedState
 ---@field line_map UnifiedLineInfo[] 1-indexed by rendered row
 ---@field row_of_new table<integer, integer> new_lnum -> rendered row (ctx + add)
 ---@field row_of_old table<integer, integer> old_lnum -> rendered row (ctx + del)
 ---@field hunk_rows integer[] first rendered row of each hunk
+---@field hunk_ranges { [1]: integer, [2]: integer }[] rendered rows of each hunk (parallel to hunk_rows)
+---@field n_moved? integer Lines that moved elsewhere in the file
+---@field n_reindent? integer Lines that only changed indentation
 ---@field fold_ranges { [1]: integer, [2]: integer }[] rows of unchanged gaps
 ---@field buf_a? integer
 ---@field buf_b? integer
@@ -147,6 +169,144 @@ local function source_lines(file)
   return {}, nil
 end
 
+local function trim(s)
+  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+---A line that identifies code on its own: some word characters and more than
+---a token (`end`, `}`, `)`, blanks and the like match far too often).
+local function significant(t)
+  return #t >= 4 and t:find("%w") ~= nil
+end
+
+---Mark deleted/added runs that are the same code in another place (moved) or
+---the same code at another indentation in the same hunk (reindent). Lines are
+---compared with indentation stripped. Marks land on `line_map` rows: `moved`,
+---and on each block's first row a `moved_hint` naming the other end.
+---Greedy and linear-ish: for each deleted line (in order) the longest run
+---starting at one of its first MOVED_MAX_CANDIDATES matches wins.
+---@param hunks table vim.diff indices
+---@param old_lines string[]
+---@param new_lines string[]
+---@param line_map UnifiedLineInfo[]
+---@param row_of_old table<integer, integer>
+---@param row_of_new table<integer, integer>
+---@return integer n_moved lines that moved elsewhere (counted once, not per side)
+---@return integer n_reindent lines that only changed indentation
+function M.mark_moved(hunks, old_lines, new_lines, line_map, row_of_old, row_of_new)
+  local told, tnew = {}, {} ---@type table<integer, string>, table<integer, string>
+  local hunk_of_old, hunk_of_new = {}, {}
+  local dels = {}
+  local index = {} ---@type table<string, integer[]> trimmed added text -> new lnums
+  for hi, h in ipairs(hunks) do
+    for k = h[1], h[1] + h[2] - 1 do
+      if old_lines[k] then
+        told[k], hunk_of_old[k] = trim(old_lines[k]), hi
+        dels[#dels + 1] = k
+      end
+    end
+    for k = h[3], h[3] + h[4] - 1 do
+      if new_lines[k] then
+        local t = trim(new_lines[k])
+        tnew[k], hunk_of_new[k] = t, hi
+        if significant(t) then
+          local list = index[t]
+          if not list then
+            list = {}
+            index[t] = list
+          end
+          list[#list + 1] = k
+        end
+      end
+    end
+  end
+  if #dels == 0 or next(index) == nil then return 0 end
+  table.sort(dels)
+  for _, list in pairs(index) do table.sort(list) end
+
+  local used_old, used_new = {}, {}
+  local function same(k, j)
+    return told[k] ~= nil and tnew[j] ~= nil and not used_old[k] and not used_new[j] and told[k] == tnew[j]
+  end
+
+  local n_moved, n_reindent = 0, 0
+  local reindent_note = {} ---@type table<integer, { [1]: integer, [2]: integer }> hunk -> { old lnum, new lnum }
+  for _, k in ipairs(dels) do
+    local cands = not used_old[k] and significant(told[k]) and index[told[k]]
+    if cands then
+      -- Prefer a match in the same hunk (code re-indented in place) over a
+      -- longer one elsewhere: repeated boilerplate (the same call written
+      -- twice) must not turn a re-indent into a "move" across the file.
+      -- Elsewhere, the longest run wins, the nearest on a tie.
+      local best_j, best_len, best_same = nil, 0, false
+      for ci = 1, math.min(#cands, MOVED_MAX_CANDIDATES) do
+        local j = cands[ci]
+        if not used_new[j] then
+          local len = 0
+          while same(k + len, j + len) do len = len + 1 end
+          local same_hunk = hunk_of_new[j] == hunk_of_old[k] and len >= M.MOVED_MIN_LINES
+          local better
+          if same_hunk ~= best_same then
+            better = same_hunk
+          elseif len ~= best_len then
+            better = len > best_len
+          else
+            better = best_j ~= nil and math.abs(j - k) < math.abs(best_j - k)
+          end
+          if better then best_j, best_len, best_same = j, len, same_hunk end
+        end
+      end
+      if best_j then
+        -- Grow upwards over lines skipped as insignificant (a leading blank
+        -- or doc comment line is part of the block).
+        local ks, js = k, best_j
+        while same(ks - 1, js - 1) do ks, js = ks - 1, js - 1 end
+        local n = best_len + (k - ks)
+        local sig = 0
+        for t = 0, n - 1 do
+          if significant(told[ks + t]) then sig = sig + 1 end
+        end
+        if n >= M.MOVED_MIN_LINES and sig >= MOVED_MIN_SIG then
+          local kind = hunk_of_old[ks] == hunk_of_new[js] and "reindent" or "moved"
+          for t = 0, n - 1 do
+            used_old[ks + t], used_new[js + t] = true, true
+            local ro, rn = row_of_old[ks + t], row_of_new[js + t]
+            if ro then line_map[ro].moved = kind end
+            if rn then line_map[rn].moved = kind end
+          end
+          local ro, rn = row_of_old[ks], row_of_new[js]
+          if kind == "moved" then
+            n_moved = n_moved + n
+            -- Both ends point at each other; the arrow says which way to go.
+            local down = not (ro and rn and rn < ro)
+            if ro then line_map[ro].moved_hint = ("moved to line %d %s"):format(js, down and "↓" or "↑") end
+            if rn then line_map[rn].moved_hint = ("moved from line %d %s"):format(ks, down and "↑" or "↓") end
+          else
+            n_reindent = n_reindent + n
+            -- One note per hunk, on its first re-indented removed line (the
+            -- first one you meet: removed rows come first). Dels are walked
+            -- in order, so the first block seen in a hunk is its topmost.
+            local h = hunk_of_old[ks]
+            if not reindent_note[h] then reindent_note[h] = { ks, js } end
+          end
+        end
+      end
+    end
+  end
+
+  for _, note in pairs(reindent_note) do
+    local ro = row_of_old[note[1]]
+    if ro then line_map[ro].moved_hint = ("only re-indented · now line %d"):format(note[2]) end
+  end
+  return n_moved, n_reindent
+end
+
+---Whether diffs ignore whitespace (runtime: the `gw` toggle flips it).
+---@return boolean
+function M.ignore_whitespace()
+  return require("diffview.config").get_config().ignore_whitespace and true or false
+end
+
 ---Compute the interleaved unified lines + line map from two line arrays.
 ---Also the engine behind the peek float (diffview/peek.lua), so a hunk reads
 ---the same there as in the view.
@@ -169,6 +329,13 @@ function M.build(old_lines, new_lines, file_mode)
     local ok, diff_result = pcall(vim.diff, old_text, new_text, {
       result_type = "indices",
       algorithm = "histogram",
+      -- git's default: slide each hunk so its edges fall on indentation
+      -- boundaries, so an added function reads as one block instead of
+      -- borrowing the previous function's closing brace.
+      indent_heuristic = true,
+      -- git's -w (config.ignore_whitespace, toggled by `gw`): a re-indented
+      -- or reformatted line is context, shown with its new text.
+      ignore_whitespace = M.ignore_whitespace(),
     })
     if ok and diff_result then
       for _, hunk in ipairs(diff_result) do
@@ -236,6 +403,24 @@ function M.build(old_lines, new_lines, file_mode)
     if #lines >= hunk_first then
       hunk_rows[#hunk_rows + 1] = hunk_first
       hunk_row_ranges[#hunk_row_ranges + 1] = { hunk_first, #lines }
+      -- A replacement (rows removed AND added) gets a bracket in the gutter
+      -- from its first removed row to its last added row, with a tee where
+      -- the new text starts: "this became that", as opposed to a deletion
+      -- that merely sits next to an unrelated addition.
+      if ca > 0 and cb > 0 and #lines > hunk_first then
+        local first_add = hunk_first + ca
+        for r = hunk_first, #lines do
+          local g = "│"
+          if r == hunk_first then
+            g = "╭"
+          elseif r == #lines then
+            g = "╰"
+          elseif r == first_add then
+            g = "├"
+          end
+          line_map[r].link = g
+        end
+      end
     end
   end
 
@@ -291,11 +476,16 @@ function M.build(old_lines, new_lines, file_mode)
   local fold_start = {}
   for _, r in ipairs(fold_ranges) do fold_start[r[1]] = true end
 
+  local n_moved, n_reindent = M.mark_moved(hunks, old_lines, new_lines, line_map, row_of_old, row_of_new)
+
   local st = {
     line_map = line_map,
     row_of_new = row_of_new,
     row_of_old = row_of_old,
     hunk_rows = hunk_rows,
+    hunk_ranges = hunk_row_ranges,
+    n_moved = n_moved,
+    n_reindent = n_reindent,
     fold_ranges = fold_ranges,
     fold_start = fold_start,
     visible_ranges = visible_ranges,
@@ -325,7 +515,7 @@ end
 ---@return table hunks
 function M.build_file(old_lines, new_lines, hunks, n_add, n_del)
   local line_map, row_of_new, row_of_old = {}, {}, {}
-  local signs, hunk_rows = {}, {}
+  local signs, hunk_rows, hunk_ranges = {}, {}, {}
 
   -- Map unchanged lines to their old numbers by walking the hunks.
   local oi, ni = 1, 1
@@ -347,6 +537,7 @@ function M.build_file(old_lines, new_lines, hunks, n_add, n_del)
         signs[k] = ca > 0 and "change" or "add"
       end
       hunk_rows[#hunk_rows + 1] = sb
+      hunk_ranges[#hunk_ranges + 1] = { sb, sb + cb - 1 }
       ni = sb + cb
     else
       -- Pure deletion after new line `sb` (0 = before the first line).
@@ -355,6 +546,7 @@ function M.build_file(old_lines, new_lines, hunks, n_add, n_del)
       if new_lines[row] then
         signs[row] = sb == 0 and "topdelete" or "delete"
         hunk_rows[#hunk_rows + 1] = row
+        hunk_ranges[#hunk_ranges + 1] = { row, row }
       end
     end
     -- vim.diff: a zero count's start is the line the change follows.
@@ -367,6 +559,7 @@ function M.build_file(old_lines, new_lines, hunks, n_add, n_del)
     row_of_new = row_of_new,
     row_of_old = row_of_old,
     hunk_rows = hunk_rows,
+    hunk_ranges = hunk_ranges,
     fold_ranges = {},
     fold_start = {},
     visible_ranges = { { 1, #new_lines } },
@@ -383,6 +576,20 @@ function M.build_file(old_lines, new_lines, hunks, n_add, n_del)
   }
 
   return vim.list_slice(new_lines), st, hunks
+end
+
+---End-of-line note on the first row of a moved / re-indented block.
+---@param bufnr integer
+---@param row integer 1-indexed
+---@param info UnifiedLineInfo
+local function moved_hint(bufnr, row, info)
+  if not info.moved_hint then return end
+  api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
+    virt_text = { { "  " .. info.moved_hint, "DiffviewUnifiedMovedHint" } },
+    virt_text_pos = "eol",
+    hl_mode = "combine",
+    priority = 54,
+  })
 end
 
 ---Apply persistent highlight extmarks: add/del line backgrounds + word-level
@@ -428,15 +635,30 @@ function M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
     for k = sa, sa + ca - 1 do
       local row = st.row_of_old[k]
       if row then
-        api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
-          end_row = row,
-          end_col = 0,
-          hl_group = "DiffviewDiffDelete",
-          hl_eol = true,
-          strict = false,
-          priority = 50,
-        })
-        for _, range in ipairs(range_for_old[k] or {}) do
+        local info = st.line_map[row]
+        if info.moved then
+          -- Not a real change: no red, the text dimmed over its syntax
+          -- colors (Treesitter paints at 200), so red only ever means
+          -- "read this".
+          api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
+            end_row = row,
+            end_col = 0,
+            hl_group = "DiffviewUnifiedMovedText",
+            strict = false,
+            priority = 210,
+          })
+        else
+          api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
+            end_row = row,
+            end_col = 0,
+            hl_group = "DiffviewDiffDelete",
+            hl_eol = true,
+            strict = false,
+            priority = 50,
+          })
+        end
+        moved_hint(bufnr, row, info)
+        for _, range in ipairs(not info.moved and range_for_old[k] or {}) do
           if range[2] > range[1] then
             api.nvim_buf_set_extmark(bufnr, ns, row - 1, range[1], {
               end_col = range[2],
@@ -451,15 +673,19 @@ function M.apply_hl(bufnr, st, hunks, old_lines, new_lines)
     for k = sb, sb + cb - 1 do
       local row = st.row_of_new[k]
       if row then
-        api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
-          end_row = row,
-          end_col = 0,
-          hl_group = "DiffviewDiffAdd",
-          hl_eol = true,
-          strict = false,
-          priority = 50,
-        })
-        for _, range in ipairs(range_for_new[k] or {}) do
+        local info = st.line_map[row]
+        if M.add_bands then
+          api.nvim_buf_set_extmark(bufnr, ns, row - 1, 0, {
+            end_row = row,
+            end_col = 0,
+            hl_group = info.moved and "DiffviewDiffMovedAdd" or "DiffviewDiffAdd",
+            hl_eol = true,
+            strict = false,
+            priority = 50,
+          })
+        end
+        moved_hint(bufnr, row, info)
+        for _, range in ipairs(not info.moved and range_for_new[k] or {}) do
           if range[2] > range[1] then
             api.nvim_buf_set_extmark(bufnr, ns, row - 1, range[1], {
               end_col = range[2],
@@ -642,17 +868,40 @@ local function compute_fold_labels(st)
 end
 M._compute_fold_labels = compute_fold_labels -- exposed for tests
 
+---Index of the hunk at or above `row` (0 before the first), and whether `row`
+---is inside it.
+---@param st UnifiedState
+---@param row integer
+---@return integer idx, boolean inside
+function M.hunk_at(st, row)
+  local rows = st.hunk_rows
+  local lo, hi = 1, #rows
+  local idx = 0
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    if rows[mid] <= row then
+      idx, lo = mid, mid + 1
+    else
+      hi = mid - 1
+    end
+  end
+  local range = idx > 0 and st.hunk_ranges and st.hunk_ranges[idx]
+  return idx, range and row <= range[2] or false
+end
+
 --#endregion
 
 ---Render the unified diff of two source buffers into `bufnr`.
 ---@param bufnr integer The scratch buffer to render into.
 ---@param file_a? vcs.File Old side.
 ---@param file_b? vcs.File New side.
----@param opts? { file_mode?: boolean } file_mode: the whole new file with gutter markers.
+---@param opts? { file_mode?: boolean, collapsed?: boolean } file_mode: the whole new file with gutter markers. collapsed: a generated file, folded to one row.
 ---@return UnifiedState st
 ---@return boolean changed False when the content was already up to date.
 function M.render(bufnr, file_a, file_b, opts)
   local file_mode = (opts and opts.file_mode) or false
+  local collapsed = (opts and opts.collapsed and not file_mode) or false
+  local ignore_ws = M.ignore_whitespace()
   local old_lines, buf_a = source_lines(file_a)
   local new_lines, buf_b = source_lines(file_b)
 
@@ -664,11 +913,33 @@ function M.render(bufnr, file_a, file_b, opts)
     and prev.buf_a == buf_a and prev.buf_b == buf_b
     and prev.tick_a == tick_a and prev.tick_b == tick_b
     and (prev.file_mode or false) == file_mode
+    and (prev.add_bands or false) == M.add_bands
+    and (prev.collapsed or false) == collapsed
+    and (prev.ignore_ws or false) == ignore_ws
   then
     return prev, false
   end
 
   local lines, st, hunks = M.build(old_lines, new_lines, file_mode)
+  st.add_bands = M.add_bands
+  st.ignore_ws = ignore_ws
+  if collapsed and #lines > 0 then
+    -- A generated file: one fold over everything, no hunks to walk. `zo`
+    -- shows it; the foldtext says what it is (see M.foldtext).
+    st.collapsed = true
+    st.hunk_rows, st.hunk_ranges = {}, {}
+    st.fold_ranges = { { 1, #lines } }
+    st.fold_start = { [1] = true }
+    st.visible_ranges = {}
+  elseif ignore_ws and #st.hunk_rows == 0 and #lines > 0 and not file_mode
+    and table.concat(old_lines, "\n") ~= table.concat(new_lines, "\n")
+  then
+    -- Only whitespace changed: nothing to show but the file, folded.
+    st.ws_only = true
+    st.fold_ranges = { { 1, #lines } }
+    st.fold_start = { [1] = true }
+    st.visible_ranges = {}
+  end
   st.buf_a, st.buf_b = buf_a, buf_b
   st.tick_a, st.tick_b = tick_a, tick_b
   if prev then st.diag_src, st.diag_min = prev.diag_src, prev.diag_min end
@@ -724,6 +995,7 @@ function M.slice(st, first, last)
     tick_b = st.tick_b,
     w_old = st.w_old,
     w_new = st.w_new,
+    add_bands = M.add_bands,
     col_cache = {},
     ts_cache = {},
     ts_pending = {},
@@ -854,13 +1126,20 @@ function M.statuscol()
   -- opts in diff_1_unified), virt_lines rows (comment boxes) stay blank.
   local virtnum = vim.v.virtnum
   if virtnum > 0 then
+    -- A wrapped row of a replacement keeps its bracket unbroken.
+    local info = st.line_map[vim.v.lnum]
+    local link = info and info.link
+    if link then
+      local cont = (link == "╰") and " " or "│"
+      return ("%%s%s%%#DiffviewUnifiedLink#%s%%#DiffviewNonText#↪%%* "):format((" "):rep(st.w_old + st.w_new + 2), cont)
+    end
     if not st.col_wrap then
-      st.col_wrap = ("%%s%s%%#DiffviewNonText#↪%%* "):format((" "):rep(st.w_old + st.w_new + 2))
+      st.col_wrap = ("%%s%s %%#DiffviewNonText#↪%%* "):format((" "):rep(st.w_old + st.w_new + 2))
     end
     return st.col_wrap
   elseif virtnum < 0 then
     if not st.col_blank then
-      st.col_blank = "%s" .. (" "):rep(st.w_old + st.w_new + 4)
+      st.col_blank = "%s" .. (" "):rep(st.w_old + st.w_new + 5)
     end
     return st.col_blank
   end
@@ -874,7 +1153,7 @@ function M.statuscol()
   then
     if not st.col_fold then
       st.col_fold = ("%%s%%#DiffviewUnifiedFoldIcon#%s⋯%%* ")
-        :format((" "):rep(st.w_old + st.w_new + 2))
+        :format((" "):rep(st.w_old + st.w_new + 3))
     end
     return st.col_fold
   end
@@ -897,15 +1176,18 @@ function M.statuscol()
 
   local marker
   if info.kind == "add" then
-    marker = "%#DiffviewUnifiedSignAdd#+"
+    -- Without the band, the gutter bar is what marks an added line.
+    local glyph = st.add_bands and "+" or "▎"
+    marker = (info.moved and "%#DiffviewUnifiedSignMoved#" or "%#DiffviewUnifiedSignAdd#") .. glyph
   elseif info.kind == "del" then
-    marker = "%#DiffviewUnifiedSignDel#-"
+    marker = info.moved and "%#DiffviewUnifiedSignMoved#-" or "%#DiffviewUnifiedSignDel#-"
   else
     marker = " "
   end
+  local link = info.link and ("%#DiffviewUnifiedLink#" .. info.link) or " "
 
-  local col = ("%%s%%#DiffviewUnifiedNumOld#%s %%#DiffviewUnifiedNumNew#%s %s%%* ")
-    :format(old_s, new_s, marker)
+  local col = ("%%s%%#DiffviewUnifiedNumOld#%s %%#DiffviewUnifiedNumNew#%s %s%s%%* ")
+    :format(old_s, new_s, link, marker)
   st.col_cache[lnum] = col
   if vim.v.relnum == 0 then return (col:gsub("UnifiedNum%a+#", "UnifiedNumCur#")) end
   return col
@@ -916,8 +1198,19 @@ end
 ---view followed by the scope of the next change (see compute_fold_labels).
 function M.foldtext()
   local n = vim.v.foldend - vim.v.foldstart + 1
-  local chunks = { { ("%d unchanged line%s"):format(n, n == 1 and "" or "s"), "DiffviewUnifiedFold" } }
   local st = M.state[api.nvim_get_current_buf()]
+  if st and st.collapsed and vim.v.foldstart == 1 then
+    return {
+      { "generated file", "DiffviewUnifiedFoldScope" },
+      { (" · +%d -%d · zo to show, gG to stop collapsing"):format(st.n_add or 0, st.n_del or 0), "DiffviewUnifiedFold" },
+    }
+  elseif st and st.ws_only and vim.v.foldstart == 1 then
+    return {
+      { "only whitespace changed", "DiffviewUnifiedFoldScope" },
+      { (" · %d line%s · gw to show it"):format(n, n == 1 and "" or "s"), "DiffviewUnifiedFold" },
+    }
+  end
+  local chunks = { { ("%d unchanged line%s"):format(n, n == 1 and "" or "s"), "DiffviewUnifiedFold" } }
   local label = st and st.fold_labels and st.fold_labels[vim.v.foldstart]
   if label then
     chunks[#chunks + 1] = { " · ", "DiffviewUnifiedFold" }

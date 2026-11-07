@@ -4,6 +4,7 @@ local utils = require("diffview.utils")
 
 local pl = utils.path
 
+
 ---Right-truncate `text` to `budget` display cells, ellipsis at the end.
 ---@param text string
 ---@param budget integer
@@ -132,6 +133,10 @@ local function render_file(comp, show_path, indent, width)
     end
   end
 
+  -- Nothing to review in it: generated (collapsed), or 0/0 once whitespace
+  -- is ignored. Its name is dimmed.
+  local quiet = require("diffview.generated").collapsed(file.path)
+
   if file.stats then
     if file.stats.additions then
       -- "+N -M", like the section totals; a zero side is left out.
@@ -141,6 +146,7 @@ local function render_file(comp, show_path, indent, width)
       if file.stats.deletions > 0 then
         right[#right + 1] = { " -" .. file.stats.deletions, "DiffviewFilePanelDeletions" }
       end
+      if file.stats.additions + file.stats.deletions == 0 then quiet = true end
     elseif file.stats.conflicts then
       local has_conflicts = file.stats.conflicts > 0
       right[#right + 1] = {
@@ -156,7 +162,12 @@ local function render_file(comp, show_path, indent, width)
 
   -- Flex middle: basename (+ parent path in list mode).
   local flex = {
-    { file.basename, file.active and "DiffviewFilePanelSelected" or "DiffviewFilePanelFileName" },
+    {
+      file.basename,
+      file.active and "DiffviewFilePanelSelected"
+        or quiet and "DiffviewFilePanelGenerated"
+        or "DiffviewFilePanelFileName",
+    },
   }
   if show_path then
     flex[#flex + 1] = { " " .. file.parent_path, "DiffviewFilePanelPath" }
